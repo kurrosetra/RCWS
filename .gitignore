@@ -30,3 +30,10 @@
 *.exe
 *.out
 *.app
+Firmware/Button/.*
+Firmware/Button/Release
+Firmware/Button/sloeber.ino.cpp
+Firmware/Panel/.*
+Firmware/Panel/Release
+Firmware/RemoteSystemsTempFiles/.project
+Firmware/Panel/sloeber.ino.cpp
