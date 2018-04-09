@@ -36,12 +36,12 @@ protected:
 	HardwareSerial *_uart;
 	uint32_t _baud;
 
-	String in;
+	String in="";
 	String _header;
-	bool inCompleted;
+	bool inCompleted=0;
 
-	byte dataIn;
-	uint16_t volValue;
+	byte dataIn=0;
+	uint16_t volValue=0;
 
 public:
 	ButtonClass(HardwareSerial &uart, uint32_t baud);
