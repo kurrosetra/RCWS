@@ -15,7 +15,7 @@
 
 #if DEBUG
 #define BUTTON_DEBUG			0
-#define BUS_DEBUG				0
+#define BUS_DEBUG				1
 #if BUS_DEBUG
 #define BUS_JS_DEBUG			0
 #define BUS_IMU_DEBUG			0
@@ -105,9 +105,9 @@ double trkYoutput = 0.0;
 const double trkXkpid[3][3] = { { 20.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
 const double trkYkpid[3][3] = { { 10.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
 PID trkXpid(&trkXinput, &trkXoutput, &pidSetpoint, trkXkpid[0][0], trkXkpid[0][1], trkXkpid[0][2],
-		DIRECT);
+DIRECT);
 PID trkYpid(&trkYinput, &trkYoutput, &pidSetpoint, trkYkpid[0][0], trkYkpid[0][1], trkYkpid[0][2],
-		DIRECT);
+DIRECT);
 ///STAB parameter
 int stbPosition[2];
 double stbXinput = 0.0;
@@ -122,6 +122,8 @@ PID stbYpid(&stbYinput, &stbYoutput, &pidSetpoint, stbYkpid[0], stbYkpid[1], stb
 //MOTOR parameter
 const int motorXlimit = 29250;
 const int motorYlimit = 14625;
+//const int motorXlimit = 2925;
+//const int motorYlimit = 1462;
 
 int motorXspeed = 0;
 int motorYspeed = 0;
@@ -332,11 +334,17 @@ void busRecv()
 				a = recvMsg.data[2] & 0xF;
 				i = recvMsg.data[3];
 				if (a == 0)
-					js.tilt = i;
-				else if (a == 4)
 					js.tilt = 0 - i;
+				else if (a == 4)
+					js.tilt = i;
 				else
 					js.tilt = 0;
+//				if (a == 0)
+//					js.tilt = i;
+//				else if (a == 4)
+//					js.tilt = 0 - i;
+//				else
+//					js.tilt = 0;
 			}
 			else {
 				js.pan = 0;

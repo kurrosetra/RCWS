@@ -45,3 +45,6 @@ Firmware/hallSensor/Release
 RemoteSystemsTempFiles/*
 Firmware/test/
 *.PcbDocPreview
+Firmware/optronik/.*
+Firmware/optronik/Release
+Firmware/optronik/fcs/
