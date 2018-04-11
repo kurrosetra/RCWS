@@ -8,7 +8,7 @@
 #define DEBUG					1
 #if DEBUG
 
-#define	BUS_DEBUG				0
+#define	BUS_DEBUG				1
 #define CAM_DEBUG				0
 #define LRF_DEBUG				0
 #define IMU_DEBUG				0
@@ -53,24 +53,13 @@ byte zoomLevel = 0;
 #define LRF_POWER_ON			HIGH
 #define LRF_POWER_OFF			LOW
 #define LRF_ENABLE_PIN			3
-
-enum LrfStateValue
-{
-	LRF_DISABLE_state,
-	LRF_ENABLE_state,
-	LRF_READY_state,
-	LRF_MEASURING_state,
-	LRF_END_state
-};
+#define LRF_VALUE_VALID_TIMEOUT	10000
 
 String lrfString;
 byte lrfBufSize = 64;
-byte lrfState = LRF_DISABLE_state;
-uint16_t lrfValue = 0;
-uint32_t lrfTimerEnable = 0;
-uint32_t lrfTimerReady = 0;
-uint32_t lrfTimerMeasuring = 0;
-uint32_t lrfTimerEnd = 0;
+bool lrfStart = 0;
+uint16_t lrfVal = 0;
+uint32_t lrfValValidTimer = 0;
 
 //CAN parameter
 const byte BUS_CS_PIN = 10;
@@ -80,6 +69,7 @@ const uint16_t BUS_MAIN_CMD2_ID = 0x311;
 const uint16_t BUS_BUTTON_ID = 0x320;
 const uint16_t BUS_OPT_ID = 0x330;
 const uint16_t BUS_IMU_ID = 0x331;
+const uint32_t BUS_JOYSTICK_ID = 0x8CFDD633;
 const byte BUS_OPT_SIZE = 3;
 const byte BUS_IMU_SIZE = 6;
 MCP2515 bus(BUS_CS_PIN);
@@ -126,7 +116,6 @@ void setup()
 	pinMode(LED_BUILTIN, OUTPUT);
 	digitalWrite(LED_BUILTIN, HIGH);
 
-	imuInit();
 	wdt_enable(WDT_TIMEOUT);
 
 	camInit();
@@ -140,7 +129,6 @@ void loop()
 
 	busHandler();
 	lrfHandler();
-	imuHandler();
 }
 
 //----------- CAMERA -----------//
@@ -412,203 +400,91 @@ void camThermalCmd(byte zoom)
 //----------- LRF -----------//
 void lrfInit()
 {
-	Serial1.begin(19200);
+	Serial1.begin(115200);
+
 	// LRF's PSU
 	pinMode(LRF_POWER_PIN, OUTPUT);
-	digitalWrite(LRF_POWER_PIN, LRF_POWER_OFF);
-	// LRF's enable
-	pinMode(LRF_ENABLE_PIN, OUTPUT);
-	digitalWrite(LRF_ENABLE_PIN, LRF_POWER_OFF);
+	lrfPower(LRF_POWER_OFF);
 
 	lrfString.reserve(lrfBufSize);
 	lrfString = "";
+}
 
-	lrfTimerReady = 0;
-	lrfTimerMeasuring = 0;
-	lrfTimerEnd = 0;
-	lrfState = LRF_DISABLE_state;
+void lrfPower(bool onf)
+{
+	digitalWrite(LRF_POWER_PIN, onf);
+}
+
+bool getLrfPower()
+{
+	return digitalRead(LRF_POWER_PIN);
 }
 
 void lrfHandler()
 {
+	static uint32_t lrfNextStartTimer = 0;
 	bool lrfCompleted = 0;
 	char c;
+	byte awal, akhir;
 	String s;
-
-#if LRF_DEBUG
-	static uint32_t lrfDebugTimer = millis() + 500;
-
-	if (millis() > lrfDebugTimer) {
-		lrfDebugTimer = millis() + 200;
-		Serial.print(F("lrf state: "));
-		Serial.print(lrfState);
-		Serial.print(F("\tlrfValue= "));
-		Serial.println(lrfValue);
-
-	}
-#endif // LRF_DEBUG
-
-	lrfStateTimeoutHandler();
 
 	if (Serial1.available()) {
 		c = Serial1.read();
-		//Serial.write(c);
-		lrfString += c;
-		if (c == 0x1B)
+		if (getLrfPower() == LRF_POWER_ON) {
+			if (c == 0x0D)
+				lrfString = "";
+			else if (c == 'm')
+				lrfCompleted = 1;
+
+			lrfString += c;
+
+			if (lrfCompleted) {
+				if (lrfString.indexOf("D=") >= 0 && lrfString.indexOf('m') >= 0) {
+
+					awal = lrfString.indexOf('=') + 1;
+					if (lrfString.indexOf('.') >= 0)
+						akhir = lrfString.indexOf('.');
+					else
+						akhir = lrfString.indexOf('m');
+
+					s = lrfString.substring(awal, akhir);
+
+//					if (millis() < lrfValValidTimer && lrfVal == 0)
+//						lrfVal = s.toInt();
+
+					if (lrfStart && !lrfNextStartTimer) {
+						lrfNextStartTimer=millis()+1000;
+						lrfVal = s.toInt();
+					}
+
+					lrfString = "";
+				}
+			}	//(lrfCompleted)
+		}  // getLrfPower() == LRF_POWER_ON
+		else {
 			lrfString = "";
-		else if (c == 0x0A)
-			lrfCompleted = 1;
+		}	// else getLrfPower() == LRF_POWER_ON
+	}	//(Serial1.available())
+
+	if(lrfNextStartTimer && millis()>=lrfNextStartTimer){
+		lrfNextStartTimer=0;
+		lrfStart=0;
 	}
 
-	if (lrfCompleted) {
-		lrfString.trim();
-#if LRF_DEBUG
-		Serial.println(lrfString);
-#endif // LRF_DEBUG
-		if (lrfString.indexOf("Jenoptik DLEM4k") >= 0) {
-#if LRF_DEBUG
-			s = "MW 1 5000";
-#else
-			s = "MW 1 5000";
-#endif // LRF_DEBUG
-			lrfSend(s);
-			lrfTimerEnable = 0;
-			lrfTimerReady = millis() + 3000;
-			lrfState = LRF_READY_state;
-			bitSet(sendOptMsg.data[1], 7);
-		}
-		else if (lrfString.indexOf("MW ") >= 0) {
-			s = "DM 3 1 0 0";
-			lrfSend(s);
-			lrfTimerReady = 0;
-			lrfTimerMeasuring = millis() + 10000;
-			lrfState = LRF_MEASURING_state;
-		}
-		else if (lrfString.indexOf("DM ") >= 0) {
-			//parse lrfString
-			lrfValue = lrfFindValue(lrfString);
-			sendOptMsg.data[2] = byte(lrfValue & 0xFF);
-			sendOptMsg.data[1] &= 0xC0;
-			sendOptMsg.data[1] |= byte((lrfValue >> 8) & 0x3F);
-#if DEBUG
-			Serial.println();
-			Serial.print(F("LRF new value= "));
-			Serial.print(lrfValue);
-			Serial.println('m');
-			Serial.println();
-#endif // DEBUG
-			lrfTimerMeasuring = 0;
-			lrfTimerEnd = millis() + 20000;
-			lrfState = LRF_END_state;
-		}
-		lrfString = "";
-	}
-}
-
-void lrfStateTimeoutHandler()
-{
-	switch (lrfState)
-	{
-	case LRF_DISABLE_state:
-		break;
-	case LRF_ENABLE_state:
-		if (lrfTimerEnable && millis() > lrfTimerEnable) {
-			lrfTimerEnable = 0;
-			lrfStateToDisable();
-		}
-		break;
-	case LRF_READY_state:
-		if (lrfTimerReady && millis() > lrfTimerReady) {
-			lrfTimerReady = 0;
-			lrfStateToDisable();
-		}
-		break;
-	case LRF_MEASURING_state:
-		if (lrfTimerMeasuring && millis() > lrfTimerMeasuring) {
-			lrfTimerMeasuring = 0;
-			lrfStateToDisable();
-		}
-		break;
-	case LRF_END_state:
-		if (lrfTimerEnd && millis() > lrfTimerEnd) {
-			lrfTimerEnd = 0;
-			lrfStateToDisable();
-		}
-		break;
-	}
-}
-
-void lrfStateToDisable()
-{
-	lrfState = LRF_DISABLE_state;
-	digitalWrite(LRF_ENABLE_PIN, LRF_POWER_OFF);
-	delayWdt(10);
-	digitalWrite(LRF_POWER_PIN, LRF_POWER_OFF);
-	lrfValue = 0;
-	sendOptMsg.data[1] = 0;
-	sendOptMsg.data[2] = 0;
-#if LRF_DEBUG
-	Serial.println(F("lrf state: LRF_DISABLE_state"));
-#endif // LRF_DEBUG
-	lrfString = "";
-}
-
-uint16_t lrfFindValue(String s)
-{
-	const byte dataCount = 10;
-	uint16_t ret = 0;
-	uint16_t val[dataCount], strength = 0, strPoint = 1;
-	float f;
-	int i, awal, akhir;
-	char c;
-	String tem;
-
-	for ( i = 0; i < dataCount; i++ )
-		val[i] = 0;
-	awal = s.indexOf("DM ") + 5;
-	for ( i = 0; i < dataCount; i++ ) {
-		akhir = s.indexOf(' ', awal);
-		if (akhir > awal) {
-			tem = s.substring(awal, akhir);
-			f = tem.toFloat();
-			if (((uint16_t) (f * 10.0f) % 10) >= 5)
-				f = f + 1.0;
-			val[i] = (uint16_t) f;
-			awal = akhir + 1;
-			c = s.charAt(awal);
-			if (c == 0x03 || c == ' ')
-				break;
-		}
-		else
-			break;
+	if (lrfValValidTimer && millis() >= lrfValValidTimer) {
+		lrfValValidTimer = 0;
+		lrfVal = 0;
 	}
 
-	//find strongest signal
-	for ( i = 0; i < dataCount / 2; i++ ) {
-		if (val[(2 * i) + 1] > strength) {
-			strPoint = (2 * i) + 1;
-			strength = val[strPoint];
-		}
-	}
+	//LSB
+	sendOptMsg.data[2] = lrfVal & 0xFF;
+	//MSB
+	sendOptMsg.data[1] = (lrfVal >> 8);
+	//bit 6 -> pointer
+	bitClear(sendOptMsg.data[1], 6);
+	//bit 7 -> power
+	bitWrite(sendOptMsg.data[1], 7, getLrfPower());
 
-	ret = val[strPoint - 1];
-
-	return ret;
-}
-
-void lrfSend(String s)
-{
-	while (Serial1.available())
-		Serial1.read();
-#if LRF_DEBUG
-	Serial.print(F("send \""));
-	Serial.print(s);
-	Serial.println(F("\" to LRF"));
-#endif // LRF_DEBUG
-	Serial1.write(0x1B);	// Esc
-	Serial1.print(s);
-	Serial1.write(' ');
-	Serial1.write(0x0D);	// Cr
 }
 
 //----------- IMU -----------//
@@ -668,7 +544,7 @@ void busInit()
 	SPI.begin();
 
 	bus.reset();
-	bus.setBitrate(CAN_500KBPS);
+	bus.setBitrate(CAN_250KBPS);
 	//busSetFilter();
 	bus.setNormalMode();
 
@@ -686,167 +562,123 @@ void busInit()
 #endif // BUS_DEBUG
 }
 
-void busHandler()
-{
-	byte _cam_command = 0;
-	byte _lrf_command = 0;
-	static byte _prev_cam_command = 0;
-	static byte _prev_lrf_command = 0;
-	byte a, b;
-//	byte focusSpeed;
-
-	static uint32_t sendCamInfoTimer = millis() + 1000;
-	static uint32_t sendImuTimer = millis() + 500;
-
-	//receive command
-	if (bus.readMessage(&recvMsg) == MCP2515::ERROR_OK) {
-		//command from button
-		if (recvMsg.can_id == BUS_BUTTON_ID) {
-			digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-
-			_cam_command = recvMsg.data[1];
-#if BUS_DEBUG
-			Serial.print(F("button= 0b"));
-			Serial.println(_cam_command, BIN);
-#endif // BUS_DEBUG
-
-			////////////TEST/////////////////////////////////////////////
-			////sony test
-			//bitSet(_cam_command, 0);
-			////thermal test
-			//bitSet(_cam_command, 1);
-			/////////////////////////////////////////////////////////////
-
-			//cam selection
-			if (bitRead(_cam_command, 0))
-				camSelect(CAM_SELECT_SONY);
-			else if (bitRead(_cam_command, 1))
-				camSelect(CAM_SELECT_THERMAL);
-			else
-				camSelect(CAM_SELECT_NONE);
-
-			//zoom
-			if (camState == CAM_SELECT_SONY || camState == CAM_SELECT_THERMAL) {
-				if (bitRead(_cam_command, 2)) {
-					if (!bitRead(_prev_cam_command, 2)) {
-						camZoomAdd();
-						Serial.print(F("Zoom: "));
-						Serial.println(zoomLevel);
-					}
-					//if (camState == CAM_SELECT_SONY && zoomLevel >= 3)
-					//	sony.set_stabilizer(&sonyIface, &sonyCamera, VISCA_CAM_STABILIZER_ON);
-				}
-				else if (bitRead(_cam_command, 3)) {
-					if (!bitRead(_prev_cam_command, 3)) {
-						camZoomSubtract();
-						Serial.print(F("Zoom: "));
-						Serial.println(zoomLevel);
-					}
-					//if (camState == CAM_SELECT_SONY && zoomLevel <= 2)
-					//	sony.set_stabilizer(&sonyIface, &sonyCamera, VISCA_CAM_STABILIZER_OFF);
-				}
-			}
-
-			//focus
-			if (camState == CAM_SELECT_SONY) {
-				a = _cam_command & 0b110000;
-				b = _prev_cam_command & 0b110000;
-				if (a != b) {
-					a = a >> 4;
-					if (a == SONY_FOCUS_FAR) {
-						//if (zoomLevel == 1) focusSpeed = 7;
-						//else if (zoomLevel == 2) focusSpeed = 3;
-						//else if (zoomLevel == 3) focusSpeed = 1;
-						//else focusSpeed = 0;
-						//sony.set_focus_far_speed(&sonyIface, &sonyCamera, focusSpeed);
-						sony.set_focus_auto(&sonyIface, &sonyCamera,
-						VISCA_FOCUS_AUTO_OFF);
-						sony.set_focus_far(&sonyIface, &sonyCamera);
-					}
-					else if (a == SONY_FOCUS_NEAR) {
-						//if (zoomLevel == 1) focusSpeed = 7;
-						//else if (zoomLevel == 2) focusSpeed = 3;
-						//else if (zoomLevel == 3) focusSpeed = 1;
-						//else focusSpeed = 0;
-						//sony.set_focus_near_speed(&sonyIface, &sonyCamera, focusSpeed);
-						sony.set_focus_auto(&sonyIface, &sonyCamera,
-						VISCA_FOCUS_AUTO_OFF);
-						sony.set_focus_near(&sonyIface, &sonyCamera);
-					}
-					else {
-						sony.set_focus_stop(&sonyIface, &sonyCamera);
-					}
-				}
-			}
-
-			_prev_cam_command = _cam_command;
-		}
-		//command from mainControl
-		else if (recvMsg.can_id == BUS_MAIN_CMD2_ID) {
-			_lrf_command = recvMsg.data[1];
-
-			//TODO:
-			// add override handler
-
-			//imu update according to stab movement
-			if ((recvMsg.data[0] & 0b1100) && imuSendTimer == imuNormalTimeout) {
-				Serial.println(F("STAB start"));
-			}
-			if (recvMsg.data[0] & 0b1100)
-				imuSendTimer = imuStabTimeout;
-			else
-				imuSendTimer = imuNormalTimeout;
-
-			//LRF start measuring command
-			if (bitRead(_lrf_command, 1) && !bitRead(_prev_lrf_command, 1)) {
-				if (lrfState == LRF_DISABLE_state) {
-					digitalWrite(LRF_POWER_PIN, LRF_POWER_ON);
-					delayWdt(10);
-					digitalWrite(LRF_ENABLE_PIN, LRF_POWER_ON);
-					delayWdt(100);
-					lrfState = LRF_ENABLE_state;
-					lrfTimerEnable = millis() + 5000;
-					lrfString = "";
-#if LRF_DEBUG
-					Serial.println(F("lrf state: LRF_ENABLE_state"));
-#endif // LRF_DEBUG
-				}
-
-			}
-
-			_prev_lrf_command = _lrf_command;
-		}
-	}
-
-	//send camera state
-	if (millis() > sendCamInfoTimer) {
-		sendCamInfoTimer = millis() + 300;
-
-		bus.sendMessage(&sendOptMsg);
-	}
-
-	//send imu data
-	if (millis() > sendImuTimer) {
-		sendImuTimer = millis() + imuSendTimer;
-
-		bus.sendMessage(&sendImuMsg);
-	}
-
-}
-
 void busSetFilter()
 {
 	//RX Buffer 0
 	bus.setFilterMask(MCP2515::MASK0, 0, 0x3FF);
-	bus.setFilter(MCP2515::RXF0, 0, 0x101);		// Gunner main control
+	bus.setFilter(MCP2515::RXF0, 0, 0x311);  // panel
 	bus.setFilter(MCP2515::RXF1, 0, 0x000);
 
 	//RX Buffer 1
 	bus.setFilterMask(MCP2515::MASK1, 0, 0x3FF);
-	bus.setFilter(MCP2515::RXF2, 0, 0x220);		// Commander's button
-	bus.setFilter(MCP2515::RXF3, 0, 0x201);		// Commander's main control
+	bus.setFilter(MCP2515::RXF2, 0, 0x220);  // Commander's button
+	bus.setFilter(MCP2515::RXF3, 0, 0x201);  // Commander's main control
 	bus.setFilter(MCP2515::RXF4, 0, 0x000);
 	bus.setFilter(MCP2515::RXF5, 0, 0x000);
+}
+
+void busHandler()
+{
+	byte _cam_command = 0;
+	byte _js_command = 0;
+	static byte _prev_cam_command = 0;
+	static byte _prev_js_command = 0;
+
+	static uint32_t sendCamInfoTimer = millis() + 1000;
+//	static uint32_t sendImuTimer = millis() + 500;
+
+	//receive command
+	if (bus.readMessage(&recvMsg) == MCP2515::ERROR_OK) {
+		//command from panel
+		if (recvMsg.can_id == BUS_MAIN_CMD2_ID) {
+			digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+
+			/**
+			 * CAMERA COMMAND
+			 */
+			_cam_command = recvMsg.data[3];
+			if (_cam_command != _prev_cam_command) {
+#if BUS_DEBUG
+				Serial.print(F("cam= 0b "));
+				Serial.println(_cam_command);
+#endif	//#if BUS_DEBUG
+
+				////////////TEST/////////////////////////////////////////////
+				////sony test
+				//bitSet(_cam_command, 0);
+				////thermal test
+				//bitSet(_cam_command, 1);
+				/////////////////////////////////////////////////////////////
+
+				//cam selection
+				if (bitRead(_cam_command, 0))
+					camSelect(CAM_SELECT_SONY);
+				else if (bitRead(_cam_command, 1))
+					camSelect(CAM_SELECT_THERMAL);
+				else
+					camSelect(CAM_SELECT_NONE);
+
+				_prev_cam_command = _cam_command;
+			}	//(_cam_command != _prev_cam_command)
+
+			/**
+			 * LRF POWER COMMAND
+			 */
+			lrfPower(bitRead(recvMsg.data[1], 1));
+		}
+		//(recvMsg.can_id == BUS_MAIN_CMD2_ID)
+		else if (recvMsg.can_id == BUS_JOYSTICK_ID) {
+			_js_command = recvMsg.data[5];
+
+			/**
+			 * ZOOM COMMAND
+			 */
+			if (camState == CAM_SELECT_SONY || camState == CAM_SELECT_THERMAL) {
+				if (bitRead(_js_command, 4)) {
+					if (!bitRead(_prev_js_command, 4)) {
+						camZoomAdd();
+#if BUS_DEBUG
+						Serial.print(F("Zoom: "));
+						Serial.println(zoomLevel);
+#endif	//#if BUS_DEBUG
+					}
+				}
+				else if (bitRead(_js_command, 6)) {
+					if (!bitRead(_prev_js_command, 6)) {
+						camZoomSubtract();
+#if BUS_DEBUG
+						Serial.print(F("Zoom: "));
+						Serial.println(zoomLevel);
+#endif	//#if BUS_DEBUG
+					}
+				}
+			}
+
+			/**
+			 * LRF COMMAND
+			 */
+			if (getLrfPower() == LRF_POWER_ON && bitRead(recvMsg.data[5], 2)) {
+				lrfStart = 1;
+				lrfValValidTimer = millis() + LRF_VALUE_VALID_TIMEOUT;
+			}
+
+			_prev_js_command = _js_command;
+		}	//recvMsg.can_id == BUS_JOYSTICK_ID
+
+		//send camera state
+		if (millis() > sendCamInfoTimer) {
+			sendCamInfoTimer = millis() + 300;
+
+			bus.sendMessage(&sendOptMsg);
+		}
+
+//		//send imu data
+//		if (millis() > sendImuTimer) {
+//			sendImuTimer = millis() + imuSendTimer;
+//
+//			bus.sendMessage(&sendImuMsg);
+//		}
+	}	//(bus.readMessage(&recvMsg) == MCP2515::ERROR_OK)
 }
 
 //delay with wdt enable

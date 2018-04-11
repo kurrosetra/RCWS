@@ -14,7 +14,7 @@
 #define DEBUG					1
 
 #if DEBUG
-#define BUTTON_DEBUG			0
+#define BUTTON_DEBUG			1
 #define BUS_DEBUG				1
 #if BUS_DEBUG
 #define BUS_JS_DEBUG			0
@@ -223,7 +223,7 @@ void buttonHandler()
 		//lrf power switch
 		bitWrite(sendMsg.data[1], 1, button.getLrfPower());
 		//trigger enable switch
-		bitWrite(sendMotorMsg.data[5], 0, button.getTriggerEnable());
+		bitWrite(sendMotorMsg.data[0], 2, button.getTriggerEnable());
 	}
 }
 
@@ -275,11 +275,12 @@ void busSend()
 	if (millis() > busSendMotorTimer) {
 		busSendMotorTimer = millis() + 50;
 
-		sendMotorMsg.data[0] = 0;
 		if (js.deadman)
-			sendMotorMsg.data[0] = 0b11;
-		if (js.trigger)
-			sendMotorMsg.data[0] |= 0b100;
+			sendMotorMsg.data[0] |= 0b11;
+		else
+			sendMotorMsg.data[0] &= ~0b11;
+//		if (js.trigger)
+//			sendMotorMsg.data[0] |= 0b100;
 
 		sendMotorMsg.data[1] = byte(motorXspeed & 0xFF);
 		sendMotorMsg.data[2] = byte(motorXspeed >> 8 & 0xFF);
@@ -577,6 +578,10 @@ void moveManHandler()
 	if (millis() > timer) {
 		timer = millis() + 100;
 
+		Serial.print(F("BTN: "));
+		Serial.print(button.getTriggerEnable());
+		Serial.print(bitRead(sendMotorMsg.data[0],2));
+		Serial.print(' ');
 		Serial.print(F("JS: "));
 		Serial.print(js.pan);
 		Serial.print(' ');
