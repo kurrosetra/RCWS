@@ -4,10 +4,7 @@
 
 #include "Tracker.h"
 
-
-#include "tracker.h"
-
-TrackerClass::TrackerClass(HardwareSerial & uart, uint32_t baud) :_uart(&uart)
+TrackerClass::TrackerClass(HardwareSerial & uart, uint32_t baud):_uart(&uart)
 {
 	_baud = baud;
 	xMon = 960;
@@ -48,16 +45,9 @@ void TrackerClass::setImuVal(double azVal, double elVal)
 	_uart->println(elVal, 2);
 }
 
-void TrackerClass::clearTrackId()
+void TrackerClass::clearAllTrackId()
 {
-	byte a;
-
-	for (a = 0; a < 10; a++) {
-		_uart->print(F("RMTRK,"));
-		_uart->println(a);
-		_uart->flush();
-		delay(1);
-	}
+	_uart->println(F("CLTRK"));
 }
 
 void TrackerClass::clearTrackId(byte id)
@@ -69,5 +59,10 @@ void TrackerClass::clearTrackId(byte id)
 
 void TrackerClass::deactive()
 {
-	_uart->println(F("$TRKINIT,-1*"));
+	_uart->println(F("NOTRK"));
+}
+
+void TrackerClass::write(char c)
+{
+	_uart->write(c);
 }

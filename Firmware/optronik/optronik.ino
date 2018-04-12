@@ -10,7 +10,7 @@
 
 #define	BUS_DEBUG				1
 #define CAM_DEBUG				0
-#define LRF_DEBUG				0
+#define LRF_DEBUG				1
 #define IMU_DEBUG				0
 
 #endif // DEBUG
@@ -54,12 +54,13 @@ byte zoomLevel = 0;
 #define LRF_POWER_OFF			LOW
 #define LRF_ENABLE_PIN			3
 #define LRF_VALUE_VALID_TIMEOUT	10000
+#define LRF_NEXT_REQ_TIMEOUT	2000
 
 String lrfString;
 byte lrfBufSize = 64;
-bool lrfStart = 0;
 uint16_t lrfVal = 0;
 uint32_t lrfValValidTimer = 0;
+uint32_t lrfNextStartTimer = 0;
 
 //CAN parameter
 const byte BUS_CS_PIN = 10;
@@ -99,7 +100,7 @@ void setup()
 	String s;
 	int loc;
 
-	Serial.begin(250000);
+	Serial.begin(230400);
 	Serial.println();
 	Serial.println(F("optronik - FCS_GUNNER firmware"));
 	s = __FILE__;
@@ -400,6 +401,10 @@ void camThermalCmd(byte zoom)
 //----------- LRF -----------//
 void lrfInit()
 {
+#if LRF_DEBUG
+	Serial.print(F("LRF init ..."));
+#endif	//#if LRF_DEBUG
+
 	Serial1.begin(115200);
 
 	// LRF's PSU
@@ -408,6 +413,10 @@ void lrfInit()
 
 	lrfString.reserve(lrfBufSize);
 	lrfString = "";
+#if LRF_DEBUG
+	Serial.println(F("done!"));
+#endif	//#if LRF_DEBUG
+
 }
 
 void lrfPower(bool onf)
@@ -422,14 +431,47 @@ bool getLrfPower()
 
 void lrfHandler()
 {
-	static uint32_t lrfNextStartTimer = 0;
+	static bool onCommand = 0;
+	static bool lrfNewVal = 0;
+	static uint32_t lrfSendBeat = 0;
 	bool lrfCompleted = 0;
 	char c;
 	byte awal, akhir;
 	String s;
+	uint16_t _lrfTem = 0;
+
+	if (getLrfPower() == LRF_POWER_OFF) {
+		lrfSendBeat = 0;
+		onCommand = 0;
+	}
+	else {
+		if (lrfSendBeat == 0) {
+			lrfSendBeat = millis() + 1000;
+			lrfString = "";
+			//flush rx data buffer
+			while (Serial1.available())
+				Serial1.read();
+		}
+		else {
+			if (millis() > lrfSendBeat && !onCommand) {
+				onCommand = 1;
+				Serial1.println(F("\r\nON"));
+#if LRF_DEBUG
+				Serial.println(F("Send LRF ON command"));
+#endif	//#if LRF_DEBUG
+
+			}
+		}
+
+	}
 
 	if (Serial1.available()) {
 		c = Serial1.read();
+#if LRF_DEBUG
+		if (c != 0)
+			Serial.write(c);
+#endif	//#if LRF_DEBUG
+
 		if (getLrfPower() == LRF_POWER_ON) {
 			if (c == 0x0D)
 				lrfString = "";
@@ -441,6 +483,10 @@ void lrfHandler()
 			if (lrfCompleted) {
 				if (lrfString.indexOf("D=") >= 0 && lrfString.indexOf('m') >= 0) {
 
+#if LRF_DEBUG
+					Serial.println(lrfString);
+#endif	//#if LRF_DEBUG
+
 					awal = lrfString.indexOf('=') + 1;
 					if (lrfString.indexOf('.') >= 0)
 						akhir = lrfString.indexOf('.');
@@ -449,12 +495,16 @@ void lrfHandler()
 
 					s = lrfString.substring(awal, akhir);
 
-//					if (millis() < lrfValValidTimer && lrfVal == 0)
-//						lrfVal = s.toInt();
-
-					if (lrfStart && !lrfNextStartTimer) {
-						lrfNextStartTimer=millis()+1000;
-						lrfVal = s.toInt();
+					if (lrfNextStartTimer && !lrfNewVal) {
+						_lrfTem = s.toInt();
+						if (_lrfTem != lrfVal) {
+							lrfVal = _lrfTem;
+#if LRF_DEBUG
+							Serial.print(F("new LRF val= "));
+							Serial.println(lrfVal);
+#endif	//#if LRF_DEBUG
+							lrfNewVal = 1;
+						}
 					}
 
 					lrfString = "";
@@ -466,9 +516,9 @@ void lrfHandler()
 		}	// else getLrfPower() == LRF_POWER_ON
 	}	//(Serial1.available())
 
-	if(lrfNextStartTimer && millis()>=lrfNextStartTimer){
-		lrfNextStartTimer=0;
-		lrfStart=0;
+	if (lrfNextStartTimer && millis() >= lrfNextStartTimer) {
+		lrfNextStartTimer = 0;
+		lrfNewVal = 0;
 	}
 
 	if (lrfValValidTimer && millis() >= lrfValValidTimer) {
@@ -658,8 +708,14 @@ void busHandler()
 			 * LRF COMMAND
 			 */
 			if (getLrfPower() == LRF_POWER_ON && bitRead(recvMsg.data[5], 2)) {
-				lrfStart = 1;
-				lrfValValidTimer = millis() + LRF_VALUE_VALID_TIMEOUT;
+
+				if (!lrfNextStartTimer) {
+#if BUS_DEBUG
+					Serial.println(F("LRF REQ DATA!"));
+#endif	//#if BUS_DEBUG
+					lrfNextStartTimer = millis() + LRF_NEXT_REQ_TIMEOUT;
+					lrfValValidTimer = millis() + LRF_VALUE_VALID_TIMEOUT;
+				}
 			}
 
 			_prev_js_command = _js_command;
