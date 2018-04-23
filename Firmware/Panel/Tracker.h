@@ -9,12 +9,11 @@
 	#include "WProgram.h"
 #endif
 
-#define TRK_DEBUG				1
 
 class TrackerClass
 {
 public:
-	TrackerClass(HardwareSerial &uart, uint32_t baud=115200);
+	TrackerClass(HardwareSerial &uart, uint32_t baud = 115200);
 
 	void init();
 	bool available();
@@ -23,10 +22,9 @@ public:
 	void killApp();
 	void setLrfValue(uint16_t val);
 	void setImuVal(double azVal, double elVal);
-	void clearAllTrackId();
+	void clearTrackId();
 	void clearTrackId(byte id);
 	void deactive();
-	void write(char c);
 
 private:
 	HardwareSerial *_uart;
@@ -37,5 +35,5 @@ private:
 
 };
 
-
 #endif
+

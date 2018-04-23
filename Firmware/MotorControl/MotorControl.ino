@@ -548,7 +548,6 @@ void motorPanWrite(long speed)
 static uint32_t _prevSpeed = MOTOR_MAX_SPEED_VAL;
 static byte stopCounter = 100;
 uint32_t _spd = abs(speed);
-const uint32_t _maxPos = 1462; /*MAX position in 50ms(update rate) when full speed*/
 int32_t _pos = 0;
 
 if (motorEnable && brakeFree) {
@@ -557,9 +556,10 @@ if (motorEnable && brakeFree) {
 		if (_prevSpeed != _spd)
 			motorPan.write(0x607F, 0, _spd);
 
-		_pos = constrain(map(_spd, 0, MOTOR_MAX_SPEED_VAL, 0, _maxPos), 0, _maxPos);
 		if (speed < 0)
-			_pos = 0 - _pos;
+			_pos -= MOTOR_POS_REV_VAL;
+		else
+			_pos += MOTOR_POS_REV_VAL;
 
 		//set position
 		motorPan.setTargetPosition(_pos, true, true, false);
@@ -572,7 +572,7 @@ if (motorEnable && brakeFree) {
 			motorPan.setTargetPosition(0, true, true, true);
 			if (_prevSpeed != 0) {
 				motorPan.disableMotor();
-				delayWdt(1);
+				delayWdt(10);
 				motorPan.enableMotor();
 			}
 			//reset demand position
@@ -591,7 +591,6 @@ void motorTiltWrite(long speed)
 static uint32_t _prevSpeed = MOTOR_MAX_SPEED_VAL * 5;
 static byte stopCounter = 100;
 uint32_t _spd = abs(speed);
-uint32_t _maxPos = 7312;/*MAX position in 50ms(update rate) when full speed*/
 int32_t _pos = 0;
 
 if (motorEnable && brakeFree) {
@@ -600,9 +599,10 @@ if (motorEnable && brakeFree) {
 		if (_prevSpeed != _spd)
 			motorTilt.write(0x607F, 0, _spd);
 
-		_pos = constrain(map(_spd, 0, MOTOR_MAX_SPEED_VAL * 5, 0, _maxPos), 0, _maxPos);
 		if (speed < 0)
-			_pos = 0 - _pos;
+			_pos -= MOTOR_POS_REV_VAL * 5;
+		else
+			_pos += MOTOR_POS_REV_VAL * 5;
 
 		//set position
 		motorTilt.setTargetPosition(_pos, true, true, false);
@@ -613,11 +613,11 @@ if (motorEnable && brakeFree) {
 			stopCounter = 0;
 			//halt
 			motorTilt.setTargetPosition(0, true, true, true);
-			if (_prevSpeed != 0) {
-				motorTilt.disableMotor();
-				delayWdt(1);
-				motorTilt.enableMotor();
-			}
+//				if (_prevSpeed != 0) {
+//					motorTilt.disableMotor();
+//					delayWdt(10);
+//					motorPan.enableMotor();
+//				}
 			//reset demand position
 			_pos = motorTilt.getActualPosition();
 			motorTilt.setTargetPosition(_pos);
