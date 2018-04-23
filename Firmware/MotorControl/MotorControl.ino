@@ -26,9 +26,12 @@
 /**
  * IO DEFINITION
  */
-#define BUS_CS_PIN				16
-#define INDICATOR_PIN			31
-#define TRIGGER_PIN				17
+#define BUS_CS_PIN				49
+#define INDICATOR_PIN			13
+#define TRIGGER_PIN				45
+#define T_UP_LIMIT_PIN			10
+#define T_DOWN_LIMIT_PIN		12
+#define P_HOME_SWITCH_PIN		11
 
 const uint32_t TRIGGER_TIMEOUT = 250;
 bool triggerHOT = 0;
@@ -54,7 +57,7 @@ Ingenia_SerialServoDrive motorPan(&Serial1, MOTOR_PAN_NODE);
 #endif	//#if NOT_USE_PAN_MOTOR==0
 
 #if NOT_USE_TILT_MOTOR==0
-Ingenia_SerialServoDrive motorTilt(&Serial1, MOTOR_TILT_NODE);
+Ingenia_SerialServoDrive motorTilt(&Serial3, MOTOR_TILT_NODE);
 #endif	//#if NOT_USE_TILT_MOTOR==0
 
 bool motorEnable = 0;
@@ -63,8 +66,9 @@ struct nix_dIO
 	byte ENABLE_PIN;
 	byte HEALTH_PIN;
 	byte FAULT_RESET_PIN;
+	byte RESV_PIN;
 };
-nix_dIO panIO = { 42, 46, 44 }, tiltIO = { 48, 10, 12 };
+nix_dIO panIO = { 33, 37, 35, 31 }, tiltIO = { 44, 48, 46, 42 };
 long motorXcommand = 0, motorYcommand = 0;
 int8_t panDriverMode, tiltDriverMode;
 bool motorHoming = 0;
@@ -481,6 +485,7 @@ Serial.print(F("motor init... "));
 #endif // DEBUG
 
 Serial1.begin(115200);
+Serial3.begin(115200);
 
 // Set Modes of operation to OPEN_LOOP_VECTOR
 #if NOT_USE_PAN_MOTOR==0

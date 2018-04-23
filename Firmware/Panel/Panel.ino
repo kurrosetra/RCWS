@@ -15,12 +15,12 @@
 
 #if DEBUG
 #define BUTTON_DEBUG			1
-#define BUS_DEBUG				1
+#define BUS_DEBUG				0
 #if BUS_DEBUG
 #define BUS_JS_DEBUG			0
 #define BUS_IMU_DEBUG			0
 #endif // BUS_DEBUG
-#define MOVE_DEBUG				1
+#define MOVE_DEBUG				0
 #if MOVE_DEBUG
 #define MOVE_MAN_DEBUG			1
 #define MOVE_TRK_DEBUG			0
@@ -35,11 +35,9 @@
 #endif // DEBUG
 
 //IO definition
-#define BUTTON_RXD_PIN			17
-#define	MONITOR_EN_PIN			53
-#define JS_EN_PIN				8
-#define BUS_CS_PIN				9
-#define INDICATOR_PIN			13
+#define BUTTON_RXD_PIN			19
+#define BUS_CS_PIN				49
+#define INDICATOR_PIN			11
 
 enum ZOOM_LEVEL
 {
@@ -85,7 +83,7 @@ double imuYPR[3];
 uint16_t optLrfValue = 0;
 
 //BUTTON parameter
-ButtonClass button(Serial2, 9600);
+ButtonClass button(Serial1, 9600);
 
 //MOVEMENT parameter
 byte movementState = ButtonClass::MOVE_MANUAL;
@@ -94,7 +92,7 @@ byte optZoomLevel = ZOOM_0;
 joystick_frame js;
 double pidSetpoint = 0.0;
 ///TRACKER parameter
-TrackerClass tracker(Serial3);
+TrackerClass tracker(Serial2);
 String trackerString = "";
 const byte trackerMaxBufsize = 128;
 byte trkIdMax = 0;
@@ -169,13 +167,11 @@ void loop()
 ////////
 void ioInit()
 {
+	pinMode(LED_BUILTIN, OUTPUT);
 	pinMode(INDICATOR_PIN, OUTPUT);
-	pinMode(MONITOR_EN_PIN, OUTPUT);
-	pinMode(JS_EN_PIN, OUTPUT);
 
+	digitalWrite(LED_BUILTIN, HIGH);
 	digitalWrite(INDICATOR_PIN, LOW);
-	digitalWrite(MONITOR_EN_PIN, HIGH);
-	digitalWrite(JS_EN_PIN, HIGH);
 }
 
 ////////////
@@ -190,6 +186,10 @@ void buttonInit()
 void buttonHandler()
 {
 	byte a;
+#if BUTTON_DEBUG
+	bool _change = 0;
+	uint16_t b = 0;
+#endif	//#if BUTTON_DEBUG
 
 	if (button.read()) {
 		//movement change
@@ -212,19 +212,77 @@ void buttonHandler()
 
 			//update sendMsg
 			sendMsg.data[2] = movementState;
-		}
+
+#if BUTTON_DEBUG
+			Serial.print(F("Movement State= "));
+			if (movementState == ButtonClass::MOVE_MANUAL)
+				Serial.println(F("Manual"));
+			else if (movementState == ButtonClass::MOVE_TRACK)
+				Serial.println(F("Track"));
+			else if (movementState == ButtonClass::MOVE_STAB)
+				Serial.println(F("Stabilized"));
+
+			_change = 1;
+#endif	//#if BUTTON_DEBUG
+
+		}	//(movementState != a)
+
 		//camera switch
 		a = button.getCamera();
 		if (cameraState != a) {
 			cameraState = a;
 			sendMsg.data[3] &= ~0b11;
-			sendMsg.data[3] = cameraState;
-		}
+			sendMsg.data[3] |= cameraState;
+#if BUTTON_DEBUG
+			Serial.print(F("cameraState= "));
+			if (cameraState == ButtonClass::CAMERA_NONE)
+				Serial.println(F("None"));
+			else if (cameraState == ButtonClass::CAMERA_SONY)
+				Serial.println(F("Sony"));
+			else if (cameraState == ButtonClass::CAMERA_THERMAL)
+				Serial.println(F("Thermal"));
+
+			_change = 1;
+#endif	//#if BUTTON_DEBUG
+
+		}	//(cameraState != a)
+
 		//lrf power switch
+#if BUTTON_DEBUG
+		if (button.getLrfPower() != bitRead(sendMsg.data[1], 1)) {
+			Serial.print(F("LRF Power= "));
+			Serial.println(button.getLrfPower());
+			_change = 1;
+		}
+		if (button.getTriggerEnable() != bitRead(sendMsg.data[0], 2)) {
+			Serial.print(F("Trigger Enable= "));
+			Serial.println(button.getTriggerEnable());
+			_change = 1;
+		}
+
+		if (_change) {
+			Serial.print(F("Bus Voltage= "));
+			Serial.print(button.getVoltage() / 100);
+			Serial.print(F("."));
+			b = button.getVoltage() % 100;
+			if (b < 10)
+				Serial.print('0');
+			Serial.print(b);
+			Serial.println(F("V"));
+		}
+#endif	//#if BUTTON_DEBUG
+
 		bitWrite(sendMsg.data[1], 1, button.getLrfPower());
 		//trigger enable switch
 		bitWrite(sendMotorMsg.data[0], 2, button.getTriggerEnable());
-	}
+
+		//if bus's voltage under 22.00V (11V each battery)
+		if (button.getVoltage() <= 2200)
+			digitalWrite(INDICATOR_PIN, HIGH);
+		else
+			digitalWrite(INDICATOR_PIN, LOW);
+
+	}	//(button.read())
 }
 
 /////////
@@ -580,7 +638,7 @@ void moveManHandler()
 
 		Serial.print(F("BTN: "));
 		Serial.print(button.getTriggerEnable());
-		Serial.print(bitRead(sendMotorMsg.data[0],2));
+		Serial.print(bitRead(sendMotorMsg.data[0], 2));
 		Serial.print(' ');
 		Serial.print(F("JS: "));
 		Serial.print(js.pan);
