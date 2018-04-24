@@ -5,26 +5,27 @@
 #define WDT_RESET_TIME        100     //time to reset wdt in ms
 
 #include <Mouse.h>
-#include <Keyboard.h>
 #include <TM1637Display.h>
 #include <Keypad.h>
 
 /**
  * DEBUG DECLARATION
  */
-#define DEBUG				1
+#define DEBUG				0
 
 #if DEBUG
-# define DEBUG_JS			1
+#include <Keyboard.h>
+
+# define DEBUG_JS			0
 # define DEBUG_KEYPAD		1
-# define DEBUG_PANEL		1
+# define DEBUG_PANEL		0
 #endif	//#if DEBUG
 
 /**
  * IO DEFINITION
  */
-const byte jsAxisXPin = A3;
-const byte jsAxisYPin = A2;
+const byte jsAxisXPin = A2;
+const byte jsAxisYPin = A3;
 const byte jsRightPin = A1;
 const byte jsLeftPin = A0;
 const byte jsClearTargetPin = 15;
@@ -51,19 +52,21 @@ const byte KP_COLS = 4;
 byte KP_ROWPINS[KP_ROWS] = { 2, 3, 4, 5 };
 byte KP_COLPINS[KP_COLS] = { 6, 7, 8, 9 };
 char hexaKeys[KP_ROWS][KP_COLS] = {
-	{ '0', '1', '2', '3' },
-	{ '4', '5', '6', '7' },
-	{ '8', '9', '*', '#' },
+	{ '1', '4', '7', '*' },
+	{ '2', '5', '8', '0' },
+	{ '3', '6', '9', '#' },
 	{ 'A', 'B', 'C', 'D' }
 };
+bool inputNewValue = 0;
+String temDisplayData;
 //initialize an instance of class NewKeypad
 Keypad keypad = Keypad(makeKeymap(hexaKeys), KP_ROWPINS, KP_COLPINS, KP_ROWS, KP_COLS);
 
 /**
  * DISPLAY parameters
  */
-const uint32_t DISPLAY_REFRESH_TIMEOUT = 500;
-uint16_t displayData = 0;
+const uint32_t DISPLAY_REFRESH_TIMEOUT = 100;
+uint16_t displayData = 1000;
 TM1637Display display(dispClkPin, dispDioPin);
 
 /**
@@ -118,13 +121,14 @@ void jsHandler()
 	static uint32_t jsResponseTimer = 0;
 	int xReading = 0;
 	int yReading = 0;
+	String s;
 
 	if (millis() >= jsResponseTimer) {
 		jsResponseTimer = millis() + jsResponseDelay;
 
 		// read and scale the two axes:
-		xReading = jsReadAxis(jsAxisXPin);
-		yReading = jsReadAxis(jsAxisYPin);
+		xReading = jsReadAxis(jsAxisXPin, 0);
+		yReading = jsReadAxis(jsAxisYPin, 1);
 
 		Mouse.move(xReading, yReading, 0);
 
@@ -161,19 +165,29 @@ void jsHandler()
 		 */
 		if (!jsClearClickingFlag && digitalRead(jsClearTargetPin) == 0) {
 			jsClearClickingFlag = 1;
-			//TODO [Apr 23, 2018, miftakur]:
-			// send clear target to Jetson
-//			Keyboard.println(F("CLEAR"));
+#if DEBUG_KEYPAD
+			Keyboard.println(F("CLRTRK"));
+#else
+			// send clear target:
+			// to Jetson
+			//Keyboard.println(F("CLRTRK"));
+			// or Panel
+			s = F("$CLRTRK*");
+			panelSendString(&s);
+#endif	//#if DEBUG_KEYPAD
+
 		}
-		else if (jsClearClickingFlag && digitalRead(jsClearClickingFlag) == 1)
+		else if (jsClearClickingFlag && digitalRead(jsClearTargetPin) == 1)
 			jsClearClickingFlag = 0;
 
 	}	//(millis() >= jsResponseTimer)
 
 }
 
-int jsReadAxis(byte thisAxis)
+int jsReadAxis(byte thisAxis, bool foldVal)
 {
+	int distance = 0;
+
 	// read the analog input:
 	int reading = analogRead(thisAxis);
 
@@ -181,8 +195,10 @@ int jsReadAxis(byte thisAxis)
 	reading = map(reading, 0, 1023, 0, jsRange);
 
 	// if the output reading is outside from the rest position threshold, use it:
-	//  int distance = reading - center;
-	int distance = jsCenter - reading;
+	if (foldVal)
+		distance = reading - jsCenter;
+	else
+		distance = jsCenter - reading;
 
 	if (abs(distance) < jsThreshold)
 		distance = 0;
@@ -201,14 +217,67 @@ void kpInit()
 
 void kpHandler()
 {
+	String tem;
+	uint16_t temValue = 0;
 	char keyPress = keypad.getKey();
 
 	if (keyPress) {
 #if DEBUG_KEYPAD
-		Serial.println(keyPress);
+		Keyboard.write(keyPress);
 #endif	//#if DEBUG_KEYPAD
-		//TODO [Apr 23, 2018, miftakur]:
 		//add keypad handler here
+		if (!inputNewValue) {
+			switch (keyPress)
+			{
+			case 'A':
+				displayData += 50;
+				if (displayData >= 10000)
+					displayData = 9999;
+				break;
+			case 'B':
+				if (displayData > 50)
+					displayData -= 50;
+				else
+					displayData = 0;
+				break;
+			case 'C':
+				displayData = 1000;
+				break;
+			case 'D':
+				panelSendNewRange(displayData);
+				break;
+			case '*':
+				displayData = 0;
+				temDisplayData = "";
+				inputNewValue = 1;
+				break;
+			case '#':
+				break;
+			}
+		}	//(!inputNewValue)
+		else {
+			if (keyPress >= '0' && keyPress <= '9') {
+				temDisplayData += keyPress;
+				if (temDisplayData.toInt() >= 10000)
+					temDisplayData = "9999";
+				displayData = temDisplayData.toInt();
+
+			}	//(keyPress >= '0' && keyPress <= '9')
+			else if (keyPress == 'D') {
+				//send to Panel
+				temValue = (uint16_t) temDisplayData.toInt();
+				if (temValue >= 10000)
+					temValue = 9999;
+				displayData = temValue;
+				panelSendNewRange(displayData);
+				inputNewValue = 0;
+			}
+			else if (keyPress == '#') {
+				// set to zero
+				temDisplayData = "";
+				displayData = 0;
+			}
+		}	// else (!inputNewValue)
 	}
 }
 
@@ -246,7 +315,7 @@ void panelInit()
 {
 	Serial1.begin(115200);
 	pinMode(RXLED, OUTPUT);
-
+	digitalWrite(RXLED, LOW);
 }
 
 void panelHandler()
@@ -257,14 +326,16 @@ void panelHandler()
 	uint16_t lrfVal = 0;
 	String tem;
 
-	if (txLedTimer && millis() > txLedTimer) {
+	if (txLedTimer && millis() >= txLedTimer) {
 		txLedTimer = 0;
 		TXLED0;
 	}
 
 	if (Serial1.available()) {
-		digitalWrite(RXLED, !digitalRead(RXLED));
 		c = Serial1.read();
+
+		if (c > 0)
+			digitalWrite(RXLED, !digitalRead(RXLED));
 
 		if (c == '$')
 			sPanel = "";
@@ -276,6 +347,10 @@ void panelHandler()
 
 	if (sCompleted) {
 		if (sPanel.indexOf(F("$LRF,")) >= 0) {
+#if DEBUG_PANEL
+			Keyboard.println(sPanel);
+#endif	//#if DEBUG_PANEL
+
 			awal = 5;
 			akhir = sPanel.indexOf('*');
 			tem = sPanel.substring(awal, akhir);
@@ -283,6 +358,8 @@ void panelHandler()
 			lrfVal = tem.toInt();
 			if (lrfVal < 10000 && lrfVal != displayData)
 				displayData = lrfVal;
+
+			digitalWrite(RXLED, LOW);
 		}
 	}
 }
@@ -292,6 +369,13 @@ void panelSendNewRange(uint16_t range)
 	Serial1.print(F("$DISP,"));
 	Serial1.print(range);
 	Serial1.println(F("*"));
+	TXLED1;
+	txLedTimer = millis() + 100;
+}
+
+void panelSendString(String *s)
+{
+	Serial1.print(*s);
 	TXLED1;
 	txLedTimer = millis() + 100;
 }
