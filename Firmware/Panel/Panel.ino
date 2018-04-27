@@ -15,6 +15,7 @@
 
 #if DEBUG
 #define BUTTON_DEBUG			0
+#define EXT_DEBUG				1
 #define BUS_DEBUG				0
 #if BUS_DEBUG
 #define BUS_JS_DEBUG			0
@@ -81,6 +82,11 @@ uint32_t busSendTimer = 0;
 uint32_t busSendMotorTimer = 0;
 int imuYPR[3];
 uint16_t optLrfValue = 0;
+uint16_t manLrfValue = 0;
+
+//EXT parameters
+String extString = "";
+byte extBufsize = 64;
 
 //BUTTON parameter
 ButtonClass button(Serial1, 9600);
@@ -144,6 +150,7 @@ void setup()
 	busInit();
 	tracker.init();
 	moveInit();
+	extInit();
 }
 
 void loop()
@@ -166,7 +173,7 @@ void loop()
 	busHandler();
 	trackerHandler();
 	moveHandler();
-
+	extHandler();
 }
 
 ////////
@@ -179,6 +186,59 @@ void ioInit()
 
 	digitalWrite(LED_BUILTIN, HIGH);
 	digitalWrite(INDICATOR_PIN, LOW);
+}
+
+/////////////////////
+// EXTENSION BOARD //
+/////////////////////
+void extInit()
+{
+	Serial3.begin(115200);
+}
+
+void extHandler()
+{
+	char c;
+	bool extCompleted = 0;
+	String tem;
+	byte awal, akhir;
+	static uint32_t manLrfTimer = 0;
+
+	if (manLrfTimer && millis() > manLrfTimer) {
+		manLrfTimer = 0;
+		manLrfValue = 0;
+	}
+
+	if (Serial3.available()) {
+		c = Serial3.read();
+
+		if (c == '$')
+			extString = "";
+		else if (c == '*')
+			extCompleted = 1;
+
+		extString += c;
+	}
+
+	if (extCompleted) {
+#if EXT_DEBUG
+		Serial.print(F("extBoard command= "));
+		Serial.println(extString);
+#endif	//#if EXT_DEBUG
+
+		if (extString.indexOf(F("$CLRTRK")) >= 0)
+			tracker.clearAllTrackId();
+		else if (extString.indexOf(F("$DISP,")) >= 0) {
+			awal = extString.indexOf(',') + 1;
+			akhir = extString.indexOf('*');
+			tem = extString.substring(awal, akhir);
+			manLrfValue = tem.toInt();
+
+			tracker.setLrfValue(manLrfValue);
+
+			manLrfTimer = millis() + 10000;
+		}
+	}
 }
 
 ////////////
@@ -307,7 +367,7 @@ void busInit()
 
 	bus.reset();
 	bus.setBitrate(CAN_250KBPS);
-	//busSetFilter();
+//busSetFilter();
 	bus.setNormalMode();
 
 	sendMsg.can_id = BUS_COMMAND_ID;
@@ -324,12 +384,12 @@ void busInit()
 
 void busSetFilter()
 {
-	//RX Buffer 0
+//RX Buffer 0
 	bus.setFilterMask(MCP2515::MASK0, 0, 0x3FF);
 	bus.setFilter(MCP2515::RXF0, 0, 0x111);		// Gunner main control
 	bus.setFilter(MCP2515::RXF1, 0, 0x111);
 
-	//RX Buffer 1
+//RX Buffer 1
 	bus.setFilterMask(MCP2515::MASK1, 0, 0x3FF);
 	bus.setFilter(MCP2515::RXF2, 0, 0x220);		// Commander's button
 	bus.setFilter(MCP2515::RXF3, 0, 0x201);		// Commander's main control
@@ -457,7 +517,7 @@ void busRecv()
 			_lrf = _lrf << 8;
 			_lrf |= recvMsg.data[2];
 
-			if (_lrf != optLrfValue) {
+			if (_lrf != optLrfValue && manLrfValue == 0) {
 				optLrfValue = _lrf;
 #if DEBUG
 				Serial.println(F("==========="));
@@ -622,7 +682,7 @@ void moveHandler()
 	else if (movementState == ButtonClass::MOVE_STAB)
 		moveStabHandler();
 
-	//update sendMotorMsg
+//update sendMotorMsg
 	sendMotorMsg.data[1] = motorXspeed & 0xFF;
 	sendMotorMsg.data[2] = byte(motorXspeed >> 8);
 	sendMotorMsg.data[3] = motorYspeed & 0xFF;
@@ -638,7 +698,7 @@ void moveManHandler()
 {
 	moveManConversion(js.pan, js.tilt);
 
-	//update sendMotorMsg
+//update sendMotorMsg
 	bitWrite(sendMotorMsg.data[0], 0, js.deadman);
 	bitWrite(sendMotorMsg.data[0], 1, js.deadman);
 
@@ -857,7 +917,7 @@ void moveStabHandler()
 	if (stbYpid.Compute())
 		motorYspeed = (int) stbYoutput;
 
-	//release the brake
+//release the brake
 	bitSet(sendMotorMsg.data[0], 0);
 	bitSet(sendMotorMsg.data[0], 1);
 
