@@ -69,5 +69,15 @@ void TrackerClass::clearTrackId(byte id)
 
 void TrackerClass::deactive()
 {
-	_uart->println(F("$TRKINIT,-1*"));
+	_uart->println(F("NOTRK"));
+}
+
+void TrackerClass::clearAllTrackId()
+{
+	_uart->println(F("CLTRK"));
+}
+
+void TrackerClass::write(char c)
+{
+	_uart->write(c);
 }

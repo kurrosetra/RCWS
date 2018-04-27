@@ -24,7 +24,9 @@ public:
 	void setImuVal(double azVal, double elVal);
 	void clearTrackId();
 	void clearTrackId(byte id);
+	void clearAllTrackId();
 	void deactive();
+	void write(char c);
 
 private:
 	HardwareSerial *_uart;
