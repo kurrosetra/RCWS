@@ -3,17 +3,17 @@
 #include <SPI.h>
 #include <mcp2515.h>
 #include "libVisca.h"
-//#include "vn100.h"
 
 #define DEBUG					1
 #if DEBUG
 
 #define	BUS_DEBUG				1
 #define CAM_DEBUG				0
-#define LRF_DEBUG				0
+#define LRF_DEBUG				1
 #define IMU_DEBUG				0
 
 #endif // DEBUG
+
 #define USE_BOARD				"optronik-20171017"
 
 #define WDT_TIMEOUT           WDTO_1S //timeout of WDT = 250ms
@@ -25,12 +25,12 @@ const byte COMM_SONY_SEL_PIN = 24;
 const byte COMM_THERMAL_SEL_PIN = 25;
 const byte THERMAL_PWR_EN_PIN = 28;
 
-#define THERMAL_PWR_ON    HIGH
-#define THERMAL_PWR_OFF   LOW
-#define CAM_SELECT_NONE       0
-#define CAM_SELECT_SONY       1
-#define CAM_SELECT_THERMAL    2
-#define CAM_SELECT_DEFAULT    0xFF
+#define THERMAL_PWR_ON   	 	HIGH
+#define THERMAL_PWR_OFF   		LOW
+#define CAM_SELECT_NONE       	0
+#define CAM_SELECT_SONY       	1
+#define CAM_SELECT_THERMAL    	2
+#define CAM_SELECT_DEFAULT    	0xFF
 
 const byte ulir_connect[6] = { 0xF0, 0x00, 0x00, 0x00, 0x00, 0xFF };
 const byte ulir_zoom_1x[7] = { 0xF0, 0x01, 0x03, 0x02, 0x00, 0x05, 0xFF };
@@ -83,14 +83,15 @@ VISCAInterface_t sonyIface;
 VISCACamera_t sonyCamera;
 
 // IMU
-//VN100 imu(Serial3, 115200);
-
+#define USE_VECTORNAV_IMU		0
+String imuString;
 enum IMU_UPDATE_TIMEOUT
 {
 	imuStabTimeout = 50,
 	imuNormalTimeout = 500
 };
 uint32_t imuSendTimer = imuNormalTimeout;
+const uint32_t IMU_START_LIVE_TIME = 30;
 
 void setup()
 {
@@ -99,9 +100,9 @@ void setup()
 	String s;
 	int loc;
 
-	Serial.begin(250000);
+	Serial.begin(230400);
 	Serial.println();
-	Serial.println(F("optronik - FCS_GUNNER firmware"));
+	Serial.println(F("optronik - RCWS firmware"));
 	s = __FILE__;
 	loc = s.lastIndexOf('\\');
 	s = s.substring(loc + 1);
@@ -121,6 +122,7 @@ void setup()
 	camInit();
 	busInit();
 	lrfInit();
+	imuInit();
 }
 
 void loop()
@@ -129,6 +131,7 @@ void loop()
 
 	busHandler();
 	lrfHandler();
+	imuHandler();
 }
 
 //----------- CAMERA -----------//
@@ -160,7 +163,7 @@ void camInit()
 	Serial.println();
 	if (sony.get_camera_info(&sonyIface, &sonyCamera) == VISCA_SUCCESS) {
 		sprintf(buf, "vendor: 0x%04x\n model: 0x%04x\n ROM version: 0x%04x\n socket number: 0x%02x",
-				sonyCamera.vendor, sonyCamera.model, sonyCamera.rom_version, sonyCamera.socket_num);
+			sonyCamera.vendor, sonyCamera.model, sonyCamera.rom_version, sonyCamera.socket_num);
 		Serial.println(buf);
 	}
 	else {
@@ -449,11 +452,8 @@ void lrfHandler()
 
 					s = lrfString.substring(awal, akhir);
 
-//					if (millis() < lrfValValidTimer && lrfVal == 0)
-//						lrfVal = s.toInt();
-
 					if (lrfStart && !lrfNextStartTimer) {
-						lrfNextStartTimer=millis()+1000;
+						lrfNextStartTimer = millis() + 1000;
 						lrfVal = s.toInt();
 					}
 
@@ -466,9 +466,9 @@ void lrfHandler()
 		}	// else getLrfPower() == LRF_POWER_ON
 	}	//(Serial1.available())
 
-	if(lrfNextStartTimer && millis()>=lrfNextStartTimer){
-		lrfNextStartTimer=0;
-		lrfStart=0;
+	if (lrfNextStartTimer && millis() >= lrfNextStartTimer) {
+		lrfNextStartTimer = 0;
+		lrfStart = 0;
 	}
 
 	if (lrfValValidTimer && millis() >= lrfValValidTimer) {
@@ -490,47 +490,95 @@ void lrfHandler()
 //----------- IMU -----------//
 void imuInit()
 {
+	Serial3.begin(115200);
 }
 
 void imuHandler()
 {
-//	byte i;
-//	long _ypr[3];
-//#if IMU_DEBUG
-//	static uint16_t _imuCount = 0;
-//#endif // IMU_DEBUG
-//
-//	if (imu.read()) {
-//		imu.getYpr(_ypr);
-//		for ( i = 0; i < 3; i++ )
-//			_ypr[i] /= 10;
-//
-//		sendImuMsg.data[0] = _ypr[0] & 0xFF;
-//		sendImuMsg.data[1] = (_ypr[0] >> 8) & 0xFF;
-//		sendImuMsg.data[2] = _ypr[1] & 0xFF;
-//		sendImuMsg.data[3] = (_ypr[1] >> 8) & 0xFF;
-//		sendImuMsg.data[4] = _ypr[2] & 0xFF;
-//		sendImuMsg.data[5] = (_ypr[2] >> 8) & 0xFF;
-//
-//		_imuCount++;
-//	}
-//
-//#if IMU_DEBUG
-//	if (_imuCount > 300) {
-//		_imuCount = 0;
-//
-//		Serial.print(F("ypr: "));
-//		Serial.print(_ypr[0]);
-//		Serial.print(' ');
-//		Serial.print(_ypr[1]);
-//		Serial.print(' ');
-//		Serial.print(_ypr[2]);
-//		Serial.print('\t');
-//		Serial.print(imuSendTimer);
-//		Serial.println();
-//
-//	}
-//#endif // IMU_DEBUG
+	//$VNYMR,[YAW],[PITCH],[ROLL],,,,,,,,,*[live time (s)]
+	char c;
+	bool imuCompleted = 0;
+	float imuRead[3];
+	int _ypr[3] = { 0, 0, 0 };
+	String tem;
+	byte awal, akhir, i;
+	static uint32_t _imuLiveTime = 0;
+#if IMU_DEBUG
+	static uint32_t _imuDebug = 0;
+#endif	//#if IMU_DEBUG
+
+	if (Serial3.available()) {
+		c = Serial3.read();
+
+		if (c == '$')
+			imuString = "";
+		else if (c == '\n')
+			imuCompleted = 1;
+
+		imuString += c;
+	}
+
+	if (imuCompleted) {
+		//$VNYMR,[YAW],[PITCH],[ROLL],,,,,,,,,*[live time (s)]
+		if (imuString.indexOf(F("$VNYMR,")) >= 0) {
+			// find yaw, pitch, roll value
+			akhir = imuString.indexOf(',');
+			for ( i = 0; i < 3; i++ ) {
+				awal = akhir + 1;
+				akhir = imuString.indexOf(',', awal);
+				tem = imuString.substring(awal, akhir);
+				imuRead[i] = tem.toFloat();
+			}
+
+			// reform ypr value from float to int
+			_ypr[0] = (int) (imuRead[0] * 100); /*max 3600*/
+			_ypr[1] = (int) (imuRead[1] * 100); /*max 9000*/
+			_ypr[2] = (int) (imuRead[2] * 100); /*max 9000*/
+
+#if USE_VECTORNAV_IMU
+			sendImuMsg.data[0] = _ypr[0] & 0xFF;
+			sendImuMsg.data[1] = (_ypr[0] >> 8) & 0xFF;
+			sendImuMsg.data[2] = _ypr[1] & 0xFF;
+			sendImuMsg.data[3] = (_ypr[1] >> 8) & 0xFF;
+			sendImuMsg.data[4] = _ypr[2] & 0xFF;
+			sendImuMsg.data[5] = (_ypr[2] >> 8) & 0xFF;
+#else
+			//find imuLiveTime
+			awal = imuString.indexOf('*') + 1;
+			tem = imuString.substring(awal);
+			tem.trim();
+			_imuLiveTime = tem.toInt();
+
+			//update sendImuMsg value
+			if (_imuLiveTime >= IMU_START_LIVE_TIME) {
+				sendImuMsg.data[0] = _ypr[0] & 0xFF;
+				sendImuMsg.data[1] = (_ypr[0] >> 8) & 0xFF;
+				sendImuMsg.data[2] = _ypr[1] & 0xFF;
+				sendImuMsg.data[3] = (_ypr[1] >> 8) & 0xFF;
+				sendImuMsg.data[4] = _ypr[2] & 0xFF;
+				sendImuMsg.data[5] = (_ypr[2] >> 8) & 0xFF;
+			}	//(_imuLiveTime >= IMU_START_LIVE_TIME)
+#endif	//#elif USE_VECTORNAV_IMU
+
+		}	//(imuString.indexOf(F("$VNYMR,")) >= 0)
+
+#if IMU_DEBUG
+		if (millis() > _imuDebug) {
+			_imuDebug = millis() + 500;
+
+			//print imu's value
+			Serial.println(imuString);
+			Serial.print(F("YPR: "));
+			Serial.print(_ypr[0]);
+			Serial.print(' ');
+			Serial.print(_ypr[1]);
+			Serial.print(' ');
+			Serial.println(_ypr[2]);
+
+		}
+#endif	//#if IMU_DEBUG
+	}	//(imuCompleted)
+
 }
 
 //----------- BUS -----------//
@@ -564,12 +612,12 @@ void busInit()
 
 void busSetFilter()
 {
-	//RX Buffer 0
+//RX Buffer 0
 	bus.setFilterMask(MCP2515::MASK0, 0, 0x3FF);
 	bus.setFilter(MCP2515::RXF0, 0, 0x311);  // panel
 	bus.setFilter(MCP2515::RXF1, 0, 0x000);
 
-	//RX Buffer 1
+//RX Buffer 1
 	bus.setFilterMask(MCP2515::MASK1, 0, 0x3FF);
 	bus.setFilter(MCP2515::RXF2, 0, 0x220);  // Commander's button
 	bus.setFilter(MCP2515::RXF3, 0, 0x201);  // Commander's main control
@@ -581,13 +629,15 @@ void busHandler()
 {
 	byte _cam_command = 0;
 	byte _js_command = 0;
+	byte _move_state = 0;
 	static byte _prev_cam_command = 0;
 	static byte _prev_js_command = 0;
+	static byte _prev_move_state = 0;
 
 	static uint32_t sendCamInfoTimer = millis() + 1000;
-//	static uint32_t sendImuTimer = millis() + 500;
+	static uint32_t sendImuTimer = millis() + 500;
 
-	//receive command
+//receive command
 	if (bus.readMessage(&recvMsg) == MCP2515::ERROR_OK) {
 		//command from panel
 		if (recvMsg.can_id == BUS_MAIN_CMD2_ID) {
@@ -620,6 +670,20 @@ void busHandler()
 
 				_prev_cam_command = _cam_command;
 			}	//(_cam_command != _prev_cam_command)
+
+			/**
+			 * MOVEMENT STATE
+			 */
+			_move_state = recvMsg.data[2];
+			if (_move_state != _prev_move_state) {
+				// stabilize mode
+				if (_move_state == 0b10)
+					imuSendTimer = imuStabTimeout;
+				else
+					imuSendTimer = imuNormalTimeout;
+
+				_prev_move_state = _move_state;
+			}	//(_move_state != _prev_move_state)
 
 			/**
 			 * LRF POWER COMMAND
@@ -672,12 +736,12 @@ void busHandler()
 			bus.sendMessage(&sendOptMsg);
 		}
 
-//		//send imu data
-//		if (millis() > sendImuTimer) {
-//			sendImuTimer = millis() + imuSendTimer;
-//
-//			bus.sendMessage(&sendImuMsg);
-//		}
+		//send imu data
+		if (millis() > sendImuTimer) {
+			sendImuTimer = millis() + imuSendTimer;
+
+			bus.sendMessage(&sendImuMsg);
+		}
 	}	//(bus.readMessage(&recvMsg) == MCP2515::ERROR_OK)
 }
 

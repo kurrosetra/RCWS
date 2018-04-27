@@ -5,6 +5,7 @@
 #define WDT_RESET_TIME        100     //time to reset wdt in ms
 
 #include <Mouse.h>
+#include <Keyboard.h>
 #include <TM1637Display.h>
 #include <Keypad.h>
 
@@ -14,8 +15,6 @@
 #define DEBUG				0
 
 #if DEBUG
-#include <Keyboard.h>
-
 # define DEBUG_JS			0
 # define DEBUG_KEYPAD		1
 # define DEBUG_PANEL		0
@@ -139,11 +138,15 @@ void jsHandler()
 			jsLeftClickingFlag = 1;
 			// click the left button down
 			Mouse.press(MOUSE_LEFT);
+			// set target in rectangular zone
+			Keyboard.write('B');
 		}
 		else if (jsLeftClickingFlag == 1 && digitalRead(jsLeftPin) == 1) {
 			jsLeftClickingFlag = 0;
 			// release the left button
 			Mouse.release(MOUSE_LEFT);
+			// clear rectangular zone
+			Keyboard.write('B');
 		}
 
 		/**
@@ -316,6 +319,7 @@ void panelInit()
 	Serial1.begin(115200);
 	pinMode(RXLED, OUTPUT);
 	digitalWrite(RXLED, LOW);
+	TXLED0;
 }
 
 void panelHandler()
@@ -334,9 +338,6 @@ void panelHandler()
 	if (Serial1.available()) {
 		c = Serial1.read();
 
-		if (c > 0)
-			digitalWrite(RXLED, !digitalRead(RXLED));
-
 		if (c == '$')
 			sPanel = "";
 		else if (c == '*')
@@ -347,6 +348,7 @@ void panelHandler()
 
 	if (sCompleted) {
 		if (sPanel.indexOf(F("$LRF,")) >= 0) {
+			digitalWrite(RXLED, !digitalRead(RXLED));
 #if DEBUG_PANEL
 			Keyboard.println(sPanel);
 #endif	//#if DEBUG_PANEL
@@ -358,8 +360,6 @@ void panelHandler()
 			lrfVal = tem.toInt();
 			if (lrfVal < 10000 && lrfVal != displayData)
 				displayData = lrfVal;
-
-			digitalWrite(RXLED, LOW);
 		}
 	}
 }

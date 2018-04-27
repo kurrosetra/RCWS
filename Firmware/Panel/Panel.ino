@@ -15,9 +15,9 @@
 
 #if DEBUG
 #define BUTTON_DEBUG			1
-#define BUS_DEBUG				0
+#define BUS_DEBUG				1
 #if BUS_DEBUG
-#define BUS_JS_DEBUG			0
+#define BUS_JS_DEBUG			1
 #define BUS_IMU_DEBUG			0
 #endif // BUS_DEBUG
 #define MOVE_DEBUG				0
@@ -57,7 +57,9 @@ enum joystick_zoom
 struct joystick_frame
 {
 	bool deadman;
-	byte zoom;bool trigger;bool aButton;
+	byte zoom;
+	bool trigger;
+	bool aButton;
 	int pan;
 	int tilt;
 };
@@ -69,8 +71,8 @@ const uint16_t BUS_BUTTON_ID = 0x320;
 const uint16_t BUS_OPT_ID = 0x330;
 const uint16_t BUS_IMU_ID = 0x331;
 
-const uint16_t BUS_PANEL_ID = 0x310;
-const byte BUS_PANEL_SIZE = 5;
+const uint16_t BUS_MTR_CMD_ID = 0x310;
+const byte BUS_MTR_CMD_SIZE = 5;
 const uint16_t BUS_COMMAND_ID = 0x311;
 const byte BUS_COMMAND_SIZE = 4;
 MCP2515 bus(BUS_CS_PIN);
@@ -254,7 +256,7 @@ void buttonHandler()
 			Serial.println(button.getLrfPower());
 			_change = 1;
 		}
-		if (button.getTriggerEnable() != bitRead(sendMsg.data[0], 2)) {
+		if (button.getTriggerEnable() != bitRead(sendMotorMsg.data[0], 2)) {
 			Serial.print(F("Trigger Enable= "));
 			Serial.println(button.getTriggerEnable());
 			_change = 1;
@@ -272,13 +274,15 @@ void buttonHandler()
 		}
 #endif	//#if BUTTON_DEBUG
 
+		//lrf power enable
 		bitWrite(sendMsg.data[1], 1, button.getLrfPower());
 		//trigger enable switch
 		bitWrite(sendMotorMsg.data[0], 2, button.getTriggerEnable());
 
 		//if bus's voltage under 22.00V (11V each battery)
 		if (button.getVoltage() <= 2200)
-			digitalWrite(INDICATOR_PIN, HIGH);
+//			digitalWrite(INDICATOR_PIN, HIGH);
+			analogWrite(INDICATOR_PIN, 32);
 		else
 			digitalWrite(INDICATOR_PIN, LOW);
 
@@ -303,8 +307,8 @@ void busInit()
 
 	sendMsg.can_id = BUS_COMMAND_ID;
 	sendMsg.can_dlc = BUS_COMMAND_SIZE;
-	sendMotorMsg.can_id = BUS_PANEL_ID;
-	sendMotorMsg.can_dlc = BUS_PANEL_SIZE;
+	sendMotorMsg.can_id = BUS_MTR_CMD_ID;
+	sendMotorMsg.can_dlc = BUS_MTR_CMD_SIZE;
 
 	busSendTimer = millis() + 500;
 	busSendMotorTimer = millis() + 250;
@@ -337,8 +341,6 @@ void busSend()
 			sendMotorMsg.data[0] |= 0b11;
 		else
 			sendMotorMsg.data[0] &= ~0b11;
-//		if (js.trigger)
-//			sendMotorMsg.data[0] |= 0b100;
 
 		sendMotorMsg.data[1] = byte(motorXspeed & 0xFF);
 		sendMotorMsg.data[2] = byte(motorXspeed >> 8 & 0xFF);
@@ -351,6 +353,11 @@ void busSend()
 	if (millis() > busSendTimer) {
 		busSendTimer = millis() + 200;
 
+		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+
+		//TODO [Apr 25, 2018, miftakur]:
+		//send command to optronik
+		bus.sendMessage(&sendMsg);
 	}
 }
 
@@ -673,7 +680,7 @@ void moveManConversion(int x, int y)
 		motorXspeed = constrain(map(abs(x), 0, jsXMid, 0, speedXMid), 0, speedXMid);
 	else
 		motorXspeed = constrain(map(abs(x), jsXMid, jsXMax, speedXMid, speedXMax), speedXMid,
-				speedXMax);
+			speedXMax);
 	if (x < 0)
 		motorXspeed = 0 - motorXspeed;
 
@@ -681,7 +688,7 @@ void moveManConversion(int x, int y)
 		motorYspeed = constrain(map(abs(y), 0, jsYMid, 0, speedYMid), 0, speedYMid);
 	else
 		motorYspeed = constrain(map(abs(y), jsYMid, jsYMax, speedYMid, speedYMax), speedYMid,
-				speedYMax);
+			speedYMax);
 	if (y < 0)
 		motorYspeed = 0 - motorYspeed;
 
