@@ -14,16 +14,16 @@
 #define DEBUG					1
 
 #if DEBUG
-#define BUTTON_DEBUG			1
-#define BUS_DEBUG				1
+#define BUTTON_DEBUG			0
+#define BUS_DEBUG				0
 #if BUS_DEBUG
-#define BUS_JS_DEBUG			1
-#define BUS_IMU_DEBUG			0
+#define BUS_JS_DEBUG			0
+#define BUS_IMU_DEBUG			1
 #endif // BUS_DEBUG
-#define MOVE_DEBUG				0
+#define MOVE_DEBUG				1
 #if MOVE_DEBUG
 #define MOVE_MAN_DEBUG			1
-#define MOVE_TRK_DEBUG			0
+#define MOVE_TRK_DEBUG			1
 #if MOVE_TRK_DEBUG
 #define TRACK_PID_DEBUG			1
 #define TRACK_PIDX_DEBUG		1
@@ -57,9 +57,7 @@ enum joystick_zoom
 struct joystick_frame
 {
 	bool deadman;
-	byte zoom;
-	bool trigger;
-	bool aButton;
+	byte zoom;bool trigger;bool aButton;
 	int pan;
 	int tilt;
 };
@@ -81,7 +79,7 @@ struct can_frame sendMsg;
 struct can_frame sendMotorMsg;
 uint32_t busSendTimer = 0;
 uint32_t busSendMotorTimer = 0;
-double imuYPR[3];
+int imuYPR[3];
 uint16_t optLrfValue = 0;
 
 //BUTTON parameter
@@ -94,7 +92,7 @@ byte optZoomLevel = ZOOM_0;
 joystick_frame js;
 double pidSetpoint = 0.0;
 ///TRACKER parameter
-TrackerClass tracker(Serial2);
+TrackerClass tracker(Serial2, 38400);
 String trackerString = "";
 const byte trackerMaxBufsize = 128;
 byte trkIdMax = 0;
@@ -102,8 +100,8 @@ double trkXinput = 0.0;
 double trkYinput = 0.0;
 double trkXoutput = 0.0;
 double trkYoutput = 0.0;
-const double trkXkpid[3][3] = { { 20.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
-const double trkYkpid[3][3] = { { 10.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
+const double trkXkpid[3][3] = { { 150.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
+const double trkYkpid[3][3] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
 PID trkXpid(&trkXinput, &trkXoutput, &pidSetpoint, trkXkpid[0][0], trkXkpid[0][1], trkXkpid[0][2],
 DIRECT);
 PID trkYpid(&trkYinput, &trkYoutput, &pidSetpoint, trkYkpid[0][0], trkYkpid[0][1], trkYkpid[0][2],
@@ -118,6 +116,10 @@ const double stbXkpid[3] = { 20.0, 0.0, 0.0 };
 const double stbYkpid[3] = { 10.0, 0.0, 0.0 };
 PID stbXpid(&stbXinput, &stbXoutput, &pidSetpoint, stbXkpid[0], stbXkpid[1], stbXkpid[2], DIRECT);
 PID stbYpid(&stbYinput, &stbYoutput, &pidSetpoint, stbYkpid[0], stbYkpid[1], stbYkpid[2], DIRECT);
+
+#if TRACK_PID_DEBUG
+uint32_t startPidTimer = 0;
+#endif	//#if TRACK_PID_DEBUG
 
 //MOTOR parameter
 const int motorXlimit = 29250;
@@ -140,6 +142,7 @@ void setup()
 	ioInit();
 	buttonInit();
 	busInit();
+	tracker.init();
 	moveInit();
 }
 
@@ -152,14 +155,16 @@ void loop()
 #if DEBUG
 	if (Serial.available()) {
 		c = Serial.read();
-		if (c == 't') {
-
+		if (c == 'C') {
+			Serial.println(F("clear all track ID"));
+			tracker.clearAllTrackId();
 		}
 	}
 #endif // DEBUG
 
 	buttonHandler();
 	busHandler();
+	trackerHandler();
 	moveHandler();
 
 }
@@ -218,11 +223,11 @@ void buttonHandler()
 #if BUTTON_DEBUG
 			Serial.print(F("Movement State= "));
 			if (movementState == ButtonClass::MOVE_MANUAL)
-				Serial.println(F("Manual"));
+			Serial.println(F("Manual"));
 			else if (movementState == ButtonClass::MOVE_TRACK)
-				Serial.println(F("Track"));
+			Serial.println(F("Track"));
 			else if (movementState == ButtonClass::MOVE_STAB)
-				Serial.println(F("Stabilized"));
+			Serial.println(F("Stabilized"));
 
 			_change = 1;
 #endif	//#if BUTTON_DEBUG
@@ -238,11 +243,11 @@ void buttonHandler()
 #if BUTTON_DEBUG
 			Serial.print(F("cameraState= "));
 			if (cameraState == ButtonClass::CAMERA_NONE)
-				Serial.println(F("None"));
+			Serial.println(F("None"));
 			else if (cameraState == ButtonClass::CAMERA_SONY)
-				Serial.println(F("Sony"));
+			Serial.println(F("Sony"));
 			else if (cameraState == ButtonClass::CAMERA_THERMAL)
-				Serial.println(F("Thermal"));
+			Serial.println(F("Thermal"));
 
 			_change = 1;
 #endif	//#if BUTTON_DEBUG
@@ -268,7 +273,7 @@ void buttonHandler()
 			Serial.print(F("."));
 			b = button.getVoltage() % 100;
 			if (b < 10)
-				Serial.print('0');
+			Serial.print('0');
 			Serial.print(b);
 			Serial.println(F("V"));
 		}
@@ -337,11 +342,6 @@ void busSend()
 	if (millis() > busSendMotorTimer) {
 		busSendMotorTimer = millis() + 50;
 
-		if (js.deadman)
-			sendMotorMsg.data[0] |= 0b11;
-		else
-			sendMotorMsg.data[0] &= ~0b11;
-
 		sendMotorMsg.data[1] = byte(motorXspeed & 0xFF);
 		sendMotorMsg.data[2] = byte(motorXspeed >> 8 & 0xFF);
 		sendMotorMsg.data[3] = byte(motorYspeed & 0xFF);
@@ -367,6 +367,10 @@ void busRecv()
 	int i;
 	uint16_t _lrf = 0;
 	uint32_t _id;
+
+#if BUS_IMU_DEBUG
+	static uint32_t imuDispTimer = 0;
+#endif	//#if BUS_IMU_DEBUG
 
 #if BUS_JS_DEBUG
 	static uint32_t jsDispTimer = 0;
@@ -469,11 +473,13 @@ void busRecv()
 			imuYPR[1] = int(recvMsg.data[3]) << 8 | recvMsg.data[2];
 			imuYPR[2] = int(recvMsg.data[5]) << 8 | recvMsg.data[4];
 #if BUS_IMU_DEBUG
-			if (imuCountDebug++ > 10) {
-				imuCountDebug = 0;
+			if (millis() > imuDispTimer) {
+				imuDispTimer = millis() + 500;
 
-				Serial.print(imuYPR[0]); Serial.print(' ');
-				Serial.print(imuYPR[1]); Serial.print(' ');
+				Serial.print(imuYPR[0]);
+				Serial.print(' ');
+				Serial.print(imuYPR[1]);
+				Serial.print(' ');
 				Serial.print(imuYPR[2]);
 				Serial.println();
 			}
@@ -527,6 +533,8 @@ void trackerHandler()
 	if (strCompleted) {
 		trackerString.trim();
 
+//		Serial.println(trackerString);
+
 		trackerValueTimer = millis() + 1000;
 
 		//$TRKUD,x,Xinput,Yinput*
@@ -574,12 +582,7 @@ void trackerHandler()
 
 void trackerClear()
 {
-#if TRACK_DEBUG && TRACK_PID_DEBUG==0
-	Serial.print(F("trkIdMax= "));
-	Serial.println(trkIdMax);
-#endif // TRACK_DEBUG
-	for ( byte i = 0; i <= trkIdMax; i++ )
-		tracker.clearTrackId(0);
+	tracker.clearAllTrackId();
 
 	trkIdMax = 0;
 }
@@ -618,6 +621,12 @@ void moveHandler()
 		moveTrackHandler();
 	else if (movementState == ButtonClass::MOVE_STAB)
 		moveStabHandler();
+
+	//update sendMotorMsg
+	sendMotorMsg.data[1] = motorXspeed & 0xFF;
+	sendMotorMsg.data[2] = byte(motorXspeed >> 8);
+	sendMotorMsg.data[3] = motorYspeed & 0xFF;
+	sendMotorMsg.data[4] = byte(motorYspeed >> 8);
 }
 
 void moveManInit()
@@ -632,10 +641,6 @@ void moveManHandler()
 	//update sendMotorMsg
 	bitWrite(sendMotorMsg.data[0], 0, js.deadman);
 	bitWrite(sendMotorMsg.data[0], 1, js.deadman);
-	sendMotorMsg.data[1] = motorXspeed & 0xFF;
-	sendMotorMsg.data[2] = byte(motorXspeed >> 8);
-	sendMotorMsg.data[3] = motorYspeed & 0xFF;
-	sendMotorMsg.data[4] = byte(motorYspeed >> 8);
 
 #if MOVE_MAN_DEBUG
 	static uint32_t timer = 0;
@@ -704,15 +709,17 @@ void moveTrackInit()
 		pidPointer = 2;
 
 #if MOVE_TRK_DEBUG
-	byte i=0;
+	byte i = 0;
 
+	Serial.print(F("zoom Level= "));
+	Serial.println(pidPointer);
 	Serial.println(F("kpid XY:"));
-	for (i = 0; i < 3; i++) {
+	for ( i = 0; i < 3; i++ ) {
 		Serial.print(trkXkpid[pidPointer][i]);
 		Serial.print(' ');
 	}
 	Serial.println();
-	for (i = 0; i < 3; i++) {
+	for ( i = 0; i < 3; i++ ) {
 		Serial.print(trkYkpid[pidPointer][i]);
 		Serial.print(' ');
 	}
@@ -730,12 +737,15 @@ void moveTrackInit()
 
 	trkXpid.SetMode(AUTOMATIC);
 	trkYpid.SetMode(AUTOMATIC);
+
 }
 
 void moveTrackEnd()
 {
 	trkXpid.SetMode(MANUAL);
 	trkYpid.SetMode(MANUAL);
+	bitClear(sendMotorMsg.data[0], 0);
+	bitClear(sendMotorMsg.data[0], 1);
 }
 
 void moveTrackHandler()
@@ -746,6 +756,8 @@ void moveTrackHandler()
 
 	if (trkXpid.Compute()) {
 		motorXspeed = (int) trkXoutput;
+		//release the brake
+		bitSet(sendMotorMsg.data[0], 0);
 
 #if TRACK_PIDX_DEBUG
 		if (millis() > dispTimer) {
@@ -753,7 +765,8 @@ void moveTrackHandler()
 
 			Serial.print((millis() - startPidTimer));
 			Serial.print(',');
-			Serial.print(trkXinput); Serial.print(',');
+			Serial.print(trkXinput);
+			Serial.print(',');
 			Serial.print(motorXspeed);
 			Serial.println();
 		}
@@ -762,6 +775,8 @@ void moveTrackHandler()
 
 	if (trkYpid.Compute()) {
 		motorYspeed = (int) trkYoutput;
+		//release the brake
+		bitSet(sendMotorMsg.data[0], 1);
 
 #if TRACK_PIDY_DEBUG
 		if (millis() > dispTimer) {
@@ -817,8 +832,8 @@ void moveStabInit()
 
 		stbXpid.SetMode(AUTOMATIC);
 		stbYpid.SetMode(AUTOMATIC);
-	}
 
+	}
 }
 
 void moveStabEnd()
@@ -841,6 +856,10 @@ void moveStabHandler()
 
 	if (stbYpid.Compute())
 		motorYspeed = (int) stbYoutput;
+
+	//release the brake
+	bitSet(sendMotorMsg.data[0], 0);
+	bitSet(sendMotorMsg.data[0], 1);
 
 #if STAB_DEBUG
 #if STAB_PIDX_DEBUG || STAB_PIDY_DEBUG

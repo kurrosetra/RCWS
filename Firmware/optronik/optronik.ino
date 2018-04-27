@@ -53,13 +53,13 @@ byte zoomLevel = 0;
 #define LRF_POWER_ON			HIGH
 #define LRF_POWER_OFF			LOW
 #define LRF_ENABLE_PIN			3
-#define LRF_VALUE_VALID_TIMEOUT	10000
+#define LRF_VALUE_LIFE_TIMEOUT	10000
 
 String lrfString;
 byte lrfBufSize = 64;
-bool lrfStart = 0;
 uint16_t lrfVal = 0;
-uint32_t lrfValValidTimer = 0;
+uint32_t lrfValidTimer = 0;
+uint32_t lrfLifeTimer = 0;
 
 //CAN parameter
 const byte BUS_CS_PIN = 10;
@@ -423,18 +423,30 @@ bool getLrfPower()
 	return digitalRead(LRF_POWER_PIN);
 }
 
+void lrfStart()
+{
+	Serial1.print(F("\r\nON\r\n"));
+}
+
+void lrfEnd()
+{
+	Serial1.print(F("\r\nOFF\r\n"));
+}
+
 void lrfHandler()
 {
-	static uint32_t lrfNextStartTimer = 0;
 	bool lrfCompleted = 0;
 	char c;
 	byte awal, akhir;
 	String s;
 
+	//TODO [Apr 27, 2018, miftakur]:
+	//lrfHandler
+
 	if (Serial1.available()) {
 		c = Serial1.read();
 		if (getLrfPower() == LRF_POWER_ON) {
-			if (c == 0x0D)
+			if (c == '\r')
 				lrfString = "";
 			else if (c == 'm')
 				lrfCompleted = 1;
@@ -442,6 +454,12 @@ void lrfHandler()
 			lrfString += c;
 
 			if (lrfCompleted) {
+
+#if LRF_DEBUG
+				if (lrfString.length() >= 3)
+					Serial.println(lrfString);
+#endif	//#if LRF_DEBUG
+
 				if (lrfString.indexOf("D=") >= 0 && lrfString.indexOf('m') >= 0) {
 
 					awal = lrfString.indexOf('=') + 1;
@@ -452,10 +470,14 @@ void lrfHandler()
 
 					s = lrfString.substring(awal, akhir);
 
-					if (lrfStart && !lrfNextStartTimer) {
-						lrfNextStartTimer = millis() + 1000;
-						lrfVal = s.toInt();
-					}
+					lrfVal = s.toInt();
+
+#if LRF_DEBUG
+					Serial.print(F("new LRF val= "));
+					Serial.println(lrfVal);
+#endif	//#if LRF_DEBUG
+
+					lrfEnd();
 
 					lrfString = "";
 				}
@@ -466,13 +488,11 @@ void lrfHandler()
 		}	// else getLrfPower() == LRF_POWER_ON
 	}	//(Serial1.available())
 
-	if (lrfNextStartTimer && millis() >= lrfNextStartTimer) {
-		lrfNextStartTimer = 0;
-		lrfStart = 0;
-	}
+	if (lrfValidTimer && millis() >= lrfValidTimer)
+		lrfValidTimer = 0;
 
-	if (lrfValValidTimer && millis() >= lrfValValidTimer) {
-		lrfValValidTimer = 0;
+	if (lrfLifeTimer && millis() > lrfLifeTimer) {
+		lrfLifeTimer = 0;
 		lrfVal = 0;
 	}
 
@@ -637,7 +657,11 @@ void busHandler()
 	static uint32_t sendCamInfoTimer = millis() + 1000;
 	static uint32_t sendImuTimer = millis() + 500;
 
-//receive command
+#if LRF_DEBUG
+	static bool prevLrfPower = 0;
+#endif	//#if LRF_DEBUG
+
+	//receive command
 	if (bus.readMessage(&recvMsg) == MCP2515::ERROR_OK) {
 		//command from panel
 		if (recvMsg.can_id == BUS_MAIN_CMD2_ID) {
@@ -689,6 +713,15 @@ void busHandler()
 			 * LRF POWER COMMAND
 			 */
 			lrfPower(bitRead(recvMsg.data[1], 1));
+#if LRF_DEBUG
+			if (prevLrfPower != getLrfPower()) {
+				prevLrfPower = getLrfPower();
+				Serial.print(F("lrf power= "));
+				Serial.println(getLrfPower());
+			}
+
+#endif	//#if LRF_DEBUG
+
 		}
 		//(recvMsg.can_id == BUS_MAIN_CMD2_ID)
 		else if (recvMsg.can_id == BUS_JOYSTICK_ID) {
@@ -721,9 +754,17 @@ void busHandler()
 			/**
 			 * LRF COMMAND
 			 */
-			if (getLrfPower() == LRF_POWER_ON && bitRead(recvMsg.data[5], 2)) {
-				lrfStart = 1;
-				lrfValValidTimer = millis() + LRF_VALUE_VALID_TIMEOUT;
+			//TODO [Apr 27, 2018, miftakur]:
+			//lrf req
+			if (getLrfPower() == LRF_POWER_ON && bitRead(recvMsg.data[5], 2)
+				&& lrfValidTimer == 0) {
+#if LRF_DEBUG
+				Serial.println(F("start LRF request!"));
+#endif	//#if LRF_DEBUG
+
+				lrfStart();
+				lrfValidTimer = millis() + 2000;
+				lrfLifeTimer = millis() + LRF_VALUE_LIFE_TIMEOUT;
 			}
 
 			_prev_js_command = _js_command;

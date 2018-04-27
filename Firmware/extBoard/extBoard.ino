@@ -50,12 +50,11 @@ const byte KP_ROWS = 4;
 const byte KP_COLS = 4;
 byte KP_ROWPINS[KP_ROWS] = { 2, 3, 4, 5 };
 byte KP_COLPINS[KP_COLS] = { 6, 7, 8, 9 };
-char hexaKeys[KP_ROWS][KP_COLS] = {
-	{ '1', '4', '7', '*' },
-	{ '2', '5', '8', '0' },
-	{ '3', '6', '9', '#' },
-	{ 'A', 'B', 'C', 'D' }
-};
+char hexaKeys[KP_ROWS][KP_COLS] = { { '1', '4', '7', '*' }, { '2', '5', '8', '0' }, {
+	'3',
+	'6',
+	'9',
+	'#' }, { 'A', 'B', 'C', 'D' } };
 bool inputNewValue = 0;
 String temDisplayData;
 //initialize an instance of class NewKeypad
@@ -122,6 +121,7 @@ void jsHandler()
 	int yReading = 0;
 	String s;
 
+
 	if (millis() >= jsResponseTimer) {
 		jsResponseTimer = millis() + jsResponseDelay;
 
@@ -139,14 +139,14 @@ void jsHandler()
 			// click the left button down
 			Mouse.press(MOUSE_LEFT);
 			// set target in rectangular zone
-			Keyboard.write('B');
+			Keyboard.write('b');
 		}
 		else if (jsLeftClickingFlag == 1 && digitalRead(jsLeftPin) == 1) {
 			jsLeftClickingFlag = 0;
 			// release the left button
 			Mouse.release(MOUSE_LEFT);
-			// clear rectangular zone
-			Keyboard.write('B');
+			// release rectangular zone
+			Keyboard.write('b');
 		}
 
 		/**
