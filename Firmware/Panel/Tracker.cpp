@@ -75,6 +75,8 @@ void TrackerClass::deactive()
 void TrackerClass::clearAllTrackId()
 {
 	_uart->println(F("CLTRK"));
+	_uart->flush();
+	_uart->println(F("MORST"));
 }
 
 void TrackerClass::write(char c)

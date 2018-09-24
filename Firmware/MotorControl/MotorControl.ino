@@ -42,16 +42,21 @@ uint32_t triggerTimer = 0;
 /**
  * MOTOR parameters
  */
-#define USE_STEPPING_MODE		0
+#define USE_STEPPING_MODE		1
 #define MOTOR_PAN_NODE			0x20
 #define MOTOR_TILT_NODE			0x21
 
 const uint32_t MOTOR_START_ENABLE_TIMEOUT = 3500;
-const uint32_t MOTOR_UPDATE_TIMEOUT = 50;
-const uint32_t MOTOR_MAX_SPEED_VAL = 29250;
+const uint32_t MOTOR_MAX_SPEED_VAL = 145000;
+#if USE_STEPPING_MODE
+const uint32_t MOTOR_UPDATE_TIMEOUT = 10;
 const int32_t MOTOR_POS_REV_VAL = 2000L;
+#else
+const uint32_t MOTOR_UPDATE_TIMEOUT = 50;
+const int32_t MOTOR_POS_REV_VAL = 10000L;
+#endif	//#if USE_STEPPING_MODE
 
-const uint16_t PAN_SPEED_HYST_VAL = 5;
+const uint16_t PAN_SPEED_HYST_VAL = 25;
 const uint16_t TILT_SPEED_HYST_VAL = 25;
 
 #if NOT_USE_PAN_MOTOR==0
@@ -61,6 +66,14 @@ Ingenia_SerialServoDrive motorPan(&Serial1, MOTOR_PAN_NODE);
 #if NOT_USE_TILT_MOTOR==0
 Ingenia_SerialServoDrive motorTilt(&Serial3, MOTOR_TILT_NODE);
 #endif	//#if NOT_USE_TILT_MOTOR==0
+
+#if USE_STEPPING_MODE
+const float xBetaStep = 0.4;
+const float yBetaStep = 0.4;
+const float xAlphaStep = 1 - xBetaStep;
+const float yAlphaStep = 1 - yBetaStep;
+long motorXcommandPrev = 0, motorYcommandPrev = 0;
+#endif	//#if USE_STEPPING_MODE
 
 bool motorEnable = 0;
 struct nix_dIO
@@ -403,6 +416,8 @@ void busRecv()
 				motorXcommand = i;
 			else
 				motorXcommand = 0;
+			//convert to motor pan range
+			motorXcommand *= 10;
 
 			//check range
 			if (abs(motorXcommand) > MOTOR_MAX_SPEED_VAL) {
@@ -421,8 +436,8 @@ void busRecv()
 			motorYcommand *= 10;
 
 			//check range
-			if (abs(motorYcommand) > MOTOR_MAX_SPEED_VAL * 5) {
-				motorYcommand = MOTOR_MAX_SPEED_VAL * 5;
+			if (abs(motorYcommand) > MOTOR_MAX_SPEED_VAL) {
+				motorYcommand = MOTOR_MAX_SPEED_VAL;
 				if (i < 0)
 					motorYcommand = 0 - motorYcommand;
 			}
@@ -451,18 +466,18 @@ void busRecv()
 		debugCounter++;
 		if (debugCounter > 20) {
 			debugCounter = 0;
-			Serial.print(F("trigger(H&F)= "));
-			Serial.print(triggerHOT);
-			Serial.print(F(" & "));
-			if (_id == BUS_JS_ID && bitRead(recvMsg.data[6], 0)) {
-				Serial.print(bitRead(recvMsg.data[6], 2));
-			}
-			Serial.print("\t\t");
+//			Serial.print(F("trigger(H&F)= "));
+//			Serial.print(triggerHOT);
+//			Serial.print(F(" & "));
+//			if (_id == BUS_JS_ID && bitRead(recvMsg.data[6], 0)) {
+//				Serial.print(bitRead(recvMsg.data[6], 2));
+//			}
+//			Serial.print("\t\t");
 
-			Serial.print(F("motorCMD= "));
-			Serial.print(motorXcommand);
-			Serial.print(F(" : "));
-			Serial.println(motorYcommand);
+//			Serial.print(F("motorCMD= "));
+//			Serial.print(motorXcommand);
+//			Serial.print(F(" : "));
+//			Serial.println(motorYcommand);
 		}
 #endif	//#if BUS_DEBUG
 
@@ -534,20 +549,35 @@ void motorHandler()
 #endif	//#if DEBUG
 	}
 
-	if (millis() > _updateTimer) {
+	if (millis() > _updateTimer && motorEnable) {
 		_updateTimer = millis() + MOTOR_UPDATE_TIMEOUT;
 
 #if NOT_USE_PAN_MOTOR==0
 		//PAN motor handler
-		motorPanWrite(motorXcommand);
-		delayWdt(1);
-#endif	//#if NOT_USE_PAN_MOTOR==0
+#if USE_STEPPING_MODE
+		//TODO [Jun 25, 2018, miftakur]:
+		// step test
+		motorXcommand = (long) ((float) motorXcommandPrev * xAlphaStep)
+			+ (long) ((float) motorXcommand * xBetaStep);
+		motorXcommandPrev = motorXcommand;
+#endif	//#if USE_STEPPING_MODE
 
+		motorPanWrite(motorXcommand);
+//		delayWdt(1);
+#endif	//#if NOT_USE_PAN_MOTOR==0
 
 #if NOT_USE_TILT_MOTOR==0
 		//TILT motor handler
+#if USE_STEPPING_MODE
+		//TODO [Jun 25, 2018, miftakur]:
+		// step test
+		motorYcommand = (long) ((float) motorYcommandPrev * yAlphaStep)
+			+ (long) ((float) motorYcommand * yBetaStep);
+		motorYcommandPrev = motorYcommand;
+#endif	//#if USE_STEPPING_MODE
+
 		motorTiltWrite(motorYcommand);
-		delayWdt(1);
+//		delayWdt(1);
 #endif	//#if NOT_USE_TILT_MOTOR==0
 	}	//(millis() > _updateTimer)
 
@@ -558,6 +588,7 @@ void motorPanWrite(long speed)
 {
 	static uint32_t _prevSpeed = MOTOR_MAX_SPEED_VAL;
 	static byte stopCounter = 100;
+	static bool direction = 0;
 	uint32_t _spd = abs(speed);
 	int32_t _pos = 0;
 
@@ -567,10 +598,18 @@ void motorPanWrite(long speed)
 			if (_prevSpeed != _spd)
 				motorPan.write(0x607F, 0, _spd);
 
-			if (speed < 0)
+			if (speed < 0) {
 				_pos -= MOTOR_POS_REV_VAL;
-			else
+				//if change direction
+				if (direction == 1)
+					motorPanWriteHalt(_prevSpeed);
+			}
+			else {
 				_pos += MOTOR_POS_REV_VAL;
+				//if change direction
+				if (direction == 0)
+					motorPanWriteHalt(_prevSpeed);
+			}
 
 			//set position
 			motorPan.setTargetPosition(_pos, true, true, false);
@@ -579,20 +618,33 @@ void motorPanWrite(long speed)
 		else {
 			if (_prevSpeed != 0 || stopCounter++ > 20) {
 				stopCounter = 0;
-				//halt
-				motorPan.setTargetPosition(0, true, true, true);
-				if (_prevSpeed != 0) {
-					motorPan.disableMotor();
-					delayWdt(10);
-					motorPan.enableMotor();
-				}
-				//reset demand position
-				_pos = motorPan.getActualPosition();
-				motorPan.setTargetPosition(_pos);
+				motorPanWriteHalt(_prevSpeed);
 			}
 		}
+
+		if (speed >= 0)
+			direction = 1;
+		else
+			direction = 0;
 		_prevSpeed = _spd;
+
 	}
+}
+
+void motorPanWriteHalt(uint32_t _prevSpeed)
+{
+	int32_t _pos = 0;
+
+	//halt
+	motorPan.setTargetPosition(0, true, true, true);
+	if (_prevSpeed != 0) {
+		motorPan.disableMotor();
+		delayWdt(1);
+		motorPan.enableMotor();
+	}
+	//reset demand position
+	_pos = motorPan.getActualPosition();
+	motorPan.setTargetPosition(_pos);
 }
 #endif	//#if NOT_USE_PAN_MOTOR==0
 
@@ -601,6 +653,7 @@ void motorTiltWrite(long speed)
 {
 	static uint32_t _prevSpeed = MOTOR_MAX_SPEED_VAL * 5;
 	static byte stopCounter = 100;
+	static bool direction = 0;
 	uint32_t _spd = abs(speed);
 	int32_t _pos = 0;
 
@@ -608,12 +661,18 @@ void motorTiltWrite(long speed)
 		if (_spd > 0) {
 			//set speed
 			if (_prevSpeed != _spd)
-			motorTilt.write(0x607F, 0, _spd);
+				motorTilt.write(0x607F, 0, _spd);
 
-			if (speed < 0)
-			_pos -= MOTOR_POS_REV_VAL * 5;
-			else
-			_pos += MOTOR_POS_REV_VAL * 5;
+			if (speed < 0) {
+				_pos -= MOTOR_POS_REV_VAL;
+				if (direction == 1)
+					motorTiltWriteHalt(_prevSpeed);
+			}
+			else {
+				_pos += MOTOR_POS_REV_VAL;
+				if (direction == 0)
+					motorTiltWriteHalt(_prevSpeed);
+			}
 
 			//set position
 			motorTilt.setTargetPosition(_pos, true, true, false);
@@ -622,20 +681,31 @@ void motorTiltWrite(long speed)
 		else {
 			if (_prevSpeed != 0 || stopCounter++ > 20) {
 				stopCounter = 0;
-				//halt
-				motorTilt.setTargetPosition(0, true, true, true);
-				if (_prevSpeed != 0) {
-					motorTilt.disableMotor();
-					delayWdt(10);
-					motorTilt.enableMotor();
-				}
-				//reset demand position
-				_pos = motorTilt.getActualPosition();
-				motorTilt.setTargetPosition(_pos);
+				motorTiltWriteHalt(_prevSpeed);
 			}
 		}
+		if (speed >= 0)
+			direction = 1;
+		else
+			direction = 0;
 		_prevSpeed = _spd;
 	}
+}
+
+void motorTiltWriteHalt(uint32_t _prevSpeed)
+{
+	long _pos;
+
+	//halt
+	motorTilt.setTargetPosition(0, true, true, true);
+	if (_prevSpeed != 0) {
+		motorTilt.disableMotor();
+		delayWdt(1);
+		motorTilt.enableMotor();
+	}
+	//reset demand position
+	_pos = motorTilt.getActualPosition();
+	motorTilt.setTargetPosition(_pos);
 }
 #endif	//#if NOT_USE_TILT_MOTOR==0
 

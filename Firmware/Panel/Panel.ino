@@ -15,7 +15,7 @@
 
 #if DEBUG
 #define BUTTON_DEBUG			0
-#define EXT_DEBUG				1
+#define EXT_DEBUG				0
 #define BUS_DEBUG				0
 #if BUS_DEBUG
 #define BUS_JS_DEBUG			0
@@ -23,14 +23,20 @@
 #endif // BUS_DEBUG
 #define MOVE_DEBUG				1
 #if MOVE_DEBUG
-#define MOVE_MAN_DEBUG			1
-#define MOVE_TRK_DEBUG			1
+#define MOVE_MAN_DEBUG			0
+#define MOVE_TRK_DEBUG			0
 #if MOVE_TRK_DEBUG
 #define TRACK_PID_DEBUG			1
 #define TRACK_PIDX_DEBUG		1
 #define TRACK_PIDY_DEBUG		0
 #endif // MOVE_TRK_DEBUG
-#define MOVE_STAB_DEBUG			0
+#define MOVE_STAB_DEBUG			1
+#if MOVE_STAB_DEBUG
+#define STAB_DEBUG				1
+#define STAB_PIDX_DEBUG			0
+#define STAB_PIDY_DEBUG			1
+#endif	//#if MOVE_STAB_DEBUG
+
 #endif // MOVE_DEBUG
 
 #endif // DEBUG
@@ -81,8 +87,21 @@ struct can_frame sendMotorMsg;
 uint32_t busSendTimer = 0;
 uint32_t busSendMotorTimer = 0;
 int imuYPR[3];
-uint16_t optLrfValue = 0;
-uint16_t manLrfValue = 0;
+
+enum lrf_using
+{
+	LRF_FROM_NONE = 0,
+	LRF_FROM_OPT = 1,
+	LRF_FROM_MAN = 2
+};
+
+struct lrf_frame
+{
+	uint16_t optLrfVal = 0;
+	uint16_t manLrfVal = 0;
+	byte lrfUsing = LRF_FROM_OPT;
+};
+lrf_frame lrfValue;
 
 //EXT parameters
 String extString = "";
@@ -106,8 +125,12 @@ double trkXinput = 0.0;
 double trkYinput = 0.0;
 double trkXoutput = 0.0;
 double trkYoutput = 0.0;
-const double trkXkpid[3][3] = { { 150.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
-const double trkYkpid[3][3] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 }, { 0.0, 0.0, 0.0 } };
+const double trkXkpid[3][3] =
+	{ { 12.5, 3.0, 0.2 }, { 0.5, 0.175, 0.005 }, { 0.25, 0.0875, 0.0025 } };
+const double trkYkpid[3][3] = {
+	{ 10.0, 2.0, 0.15 },
+	{ 0.125, 0.05, 0.001 },
+	{ 0.0625, 0.025, 0.0005 } };
 PID trkXpid(&trkXinput, &trkXoutput, &pidSetpoint, trkXkpid[0][0], trkXkpid[0][1], trkXkpid[0][2],
 DIRECT);
 PID trkYpid(&trkYinput, &trkYoutput, &pidSetpoint, trkYkpid[0][0], trkYkpid[0][1], trkYkpid[0][2],
@@ -118,8 +141,12 @@ double stbXinput = 0.0;
 double stbYinput = 0.0;
 double stbXoutput = 0.0;
 double stbYoutput = 0.0;
-const double stbXkpid[3] = { 20.0, 0.0, 0.0 };
-const double stbYkpid[3] = { 10.0, 0.0, 0.0 };
+//TODO [May 7, 2018, miftakur]:
+//stab PID const
+//const double stbXkpid[3] = { 50.0, 5.0, 0.1 };
+//const double stbYkpid[3] = { 25.0, 2.5, 0.05 };
+const double stbXkpid[3] = { 10.0f, 1.0f, 0.001f };
+const double stbYkpid[3] = { 10.0f, 1.0f, 0.001f };
 PID stbXpid(&stbXinput, &stbXoutput, &pidSetpoint, stbXkpid[0], stbXkpid[1], stbXkpid[2], DIRECT);
 PID stbYpid(&stbYinput, &stbYoutput, &pidSetpoint, stbYkpid[0], stbYkpid[1], stbYkpid[2], DIRECT);
 
@@ -128,8 +155,8 @@ uint32_t startPidTimer = 0;
 #endif	//#if TRACK_PID_DEBUG
 
 //MOTOR parameter
-const int motorXlimit = 29250;
-const int motorYlimit = 14625;
+const int motorXlimit = 14500;
+const int motorYlimit = 14500;
 //const int motorXlimit = 2925;
 //const int motorYlimit = 1462;
 
@@ -145,6 +172,11 @@ void setup()
 	Serial.println(F("Panel - RCWS firmware"));
 #endif // DEBUG
 
+	// init lrf struct data
+	lrfValue.lrfUsing = LRF_FROM_NONE;
+	lrfValue.manLrfVal = 0;
+	lrfValue.optLrfVal = 0;
+
 	ioInit();
 	buttonInit();
 	busInit();
@@ -155,17 +187,17 @@ void setup()
 
 void loop()
 {
-	char c;
-
 	wdt_reset();
 
 #if DEBUG
+	char c;
+
 	if (Serial.available()) {
 		c = Serial.read();
-		if (c == 'C') {
-			Serial.println(F("clear all track ID"));
-			tracker.clearAllTrackId();
-		}
+//		if (c == 'C') {
+//			Serial.println(F("clear all track ID"));
+//			tracker.clearAllTrackId();
+//		}
 	}
 #endif // DEBUG
 
@@ -202,12 +234,7 @@ void extHandler()
 	bool extCompleted = 0;
 	String tem;
 	byte awal, akhir;
-	static uint32_t manLrfTimer = 0;
-
-	if (manLrfTimer && millis() > manLrfTimer) {
-		manLrfTimer = 0;
-		manLrfValue = 0;
-	}
+	uint16_t _lrf = 0;
 
 	if (Serial3.available()) {
 		c = Serial3.read();
@@ -220,23 +247,29 @@ void extHandler()
 		extString += c;
 	}
 
-	if (extCompleted) {
+	if (extCompleted && lrfValue.lrfUsing == LRF_FROM_MAN) {
 #if EXT_DEBUG
 		Serial.print(F("extBoard command= "));
 		Serial.println(extString);
 #endif	//#if EXT_DEBUG
 
-		if (extString.indexOf(F("$CLRTRK")) >= 0)
+		if (extString.indexOf(F("$CLRTRK")) >= 0) {
 			tracker.clearAllTrackId();
+		}
 		else if (extString.indexOf(F("$DISP,")) >= 0) {
 			awal = extString.indexOf(',') + 1;
 			akhir = extString.indexOf('*');
 			tem = extString.substring(awal, akhir);
-			manLrfValue = tem.toInt();
+			_lrf = tem.toInt();
 
-			tracker.setLrfValue(manLrfValue);
+			if (lrfValue.manLrfVal != _lrf) {
+				lrfValue.manLrfVal = _lrf;
+				lrfValue.lrfUsing = LRF_FROM_MAN;
+				lrfValue.optLrfVal = 0;
 
-			manLrfTimer = millis() + 10000;
+				tracker.setLrfValue(lrfValue.manLrfVal);
+			}
+
 		}
 	}
 }
@@ -315,6 +348,10 @@ void buttonHandler()
 		}	//(cameraState != a)
 
 		//lrf power switch
+		if (button.getLrfPower())
+			lrfValue.lrfUsing = LRF_FROM_OPT;
+		else
+			lrfValue.lrfUsing = LRF_FROM_MAN;
 #if BUTTON_DEBUG
 		if (button.getLrfPower() != bitRead(sendMsg.data[1], 1)) {
 			Serial.print(F("LRF Power= "));
@@ -384,12 +421,12 @@ void busInit()
 
 void busSetFilter()
 {
-//RX Buffer 0
+	//RX Buffer 0
 	bus.setFilterMask(MCP2515::MASK0, 0, 0x3FF);
 	bus.setFilter(MCP2515::RXF0, 0, 0x111);		// Gunner main control
 	bus.setFilter(MCP2515::RXF1, 0, 0x111);
 
-//RX Buffer 1
+	//RX Buffer 1
 	bus.setFilterMask(MCP2515::MASK1, 0, 0x3FF);
 	bus.setFilter(MCP2515::RXF2, 0, 0x220);		// Commander's button
 	bus.setFilter(MCP2515::RXF3, 0, 0x201);		// Commander's main control
@@ -415,7 +452,6 @@ void busSend()
 
 		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
 
-		//TODO [Apr 25, 2018, miftakur]:
 		//send command to optronik
 		bus.sendMessage(&sendMsg);
 	}
@@ -469,12 +505,6 @@ void busRecv()
 					js.tilt = i;
 				else
 					js.tilt = 0;
-//				if (a == 0)
-//					js.tilt = i;
-//				else if (a == 4)
-//					js.tilt = 0 - i;
-//				else
-//					js.tilt = 0;
 			}
 			else {
 				js.pan = 0;
@@ -517,15 +547,16 @@ void busRecv()
 			_lrf = _lrf << 8;
 			_lrf |= recvMsg.data[2];
 
-			if (_lrf != optLrfValue && manLrfValue == 0) {
-				optLrfValue = _lrf;
+			if (_lrf != lrfValue.optLrfVal && lrfValue.lrfUsing == LRF_FROM_OPT) {
+				lrfValue.optLrfVal = _lrf;
+				lrfValue.lrfUsing = LRF_FROM_OPT;
 #if DEBUG
 				Serial.println(F("==========="));
-				Serial.print(F("new LRF val= "));
-				Serial.println(optLrfValue);
+				Serial.print(F("new OPT LRF val= "));
+				Serial.println(lrfValue.optLrfVal);
 				Serial.println(F("==========="));
 #endif // DEBUG
-				tracker.setLrfValue(optLrfValue);
+				tracker.setLrfValue(lrfValue.optLrfVal);
 			}
 		}	//if (_id == BUS_OPT_ID)
 		else if (_id == BUS_IMU_ID) {
@@ -568,7 +599,7 @@ void trackerHandler()
 {
 	char c;
 	bool strCompleted = 0;
-	static uint32_t imuUpdateTimer = 0;
+	static uint32_t trackerParamUpdater = 0;
 	static uint32_t trackerValueTimer = 0;
 	byte awal, akhir;
 	String tem;
@@ -595,7 +626,7 @@ void trackerHandler()
 
 //		Serial.println(trackerString);
 
-		trackerValueTimer = millis() + 1000;
+		trackerValueTimer = millis() + 500;
 
 		//$TRKUD,x,Xinput,Yinput*
 		if (trackerString.indexOf("$TRKUD,") >= 0) {
@@ -633,11 +664,19 @@ void trackerHandler()
 		trackerString = "";
 	}
 
-	if (millis() > imuUpdateTimer) {
-		imuUpdateTimer = millis() + 500;
+	if (millis() > trackerParamUpdater) {
+		trackerParamUpdater = millis() + 500;
 
 		tracker.setImuVal((double) imuYPR[0] / 100, (double) imuYPR[1] / 100);
+
+		if (lrfValue.lrfUsing == LRF_FROM_NONE)
+			tracker.setLrfValue(0);
+		else if (lrfValue.lrfUsing == LRF_FROM_OPT)
+			tracker.setLrfValue(lrfValue.optLrfVal);
+		else if (lrfValue.lrfUsing == LRF_FROM_MAN)
+			tracker.setLrfValue(lrfValue.manLrfVal);
 	}
+
 }
 
 void trackerClear()
@@ -682,11 +721,6 @@ void moveHandler()
 	else if (movementState == ButtonClass::MOVE_STAB)
 		moveStabHandler();
 
-//update sendMotorMsg
-	sendMotorMsg.data[1] = motorXspeed & 0xFF;
-	sendMotorMsg.data[2] = byte(motorXspeed >> 8);
-	sendMotorMsg.data[3] = motorYspeed & 0xFF;
-	sendMotorMsg.data[4] = byte(motorYspeed >> 8);
 }
 
 void moveManInit()
@@ -732,10 +766,10 @@ void moveManConversion(int x, int y)
 	const uint16_t jsXMax = 0xFA;
 	const uint16_t jsYMax = 0xFA;
 
-	const uint32_t speedXmid[3] = { 4000, 2000, 1000 };
-	const uint32_t speedXmax[3] = { motorXlimit, 8000, 4000 };
-	const uint32_t speedYmid[3] = { 2000, 1000, 500 };
-	const uint32_t speedYmax[3] = { motorYlimit, 4000, 2000 };
+	const uint32_t speedXmid[3] = { 4000, 500, 100 };
+	const uint32_t speedXmax[3] = { motorXlimit, 2000, 500 };
+	const uint32_t speedYmid[3] = { 2000, 100, 50 };
+	const uint32_t speedYmax[3] = { motorYlimit, 1000, 250 };
 	uint32_t speedXMid = speedXmid[optZoomLevel];
 	uint32_t speedXMax = speedXmax[optZoomLevel];
 	uint32_t speedYMid = speedYmid[optZoomLevel];
@@ -792,8 +826,10 @@ void moveTrackInit()
 	trkXpid.SetTunings(trkXkpid[pidPointer][0], trkXkpid[pidPointer][1], trkXkpid[pidPointer][2]);
 	trkYpid.SetTunings(trkYkpid[pidPointer][0], trkYkpid[pidPointer][1], trkYkpid[pidPointer][2]);
 
-	trkXoutput = (double) motorXspeed;
-	trkYoutput = (double) motorYspeed;
+//	trkXoutput = (double) motorXspeed;
+//	trkYoutput = (double) motorYspeed;
+	trkXoutput = 0;
+	trkYoutput = 0;
 
 	trkXpid.SetMode(AUTOMATIC);
 	trkYpid.SetMode(AUTOMATIC);
@@ -871,6 +907,8 @@ void moveTrackHandler()
 #endif // MOVE_TRK_DEBUG
 
 }
+//TODO [May 7, 2018, miftakur]:
+//stab Init
 
 void moveStabInit()
 {
@@ -878,17 +916,27 @@ void moveStabInit()
 		stbPosition[0] = imuYPR[0];
 		stbPosition[1] = imuYPR[1];
 
-#if MOVE_STAB_DEBUG
-		Serial.print(F("Az:El= "));
-		Serial.print(stbPosition[0]); Serial.print(' ');
-		Serial.println(stbPosition[1]);
-#endif // MOVE_STAB_DEBUG
-
 		stbXpid.SetTunings(stbXkpid[0], stbXkpid[1], stbXkpid[2]);
 		stbYpid.SetTunings(stbYkpid[0], stbYkpid[1], stbYkpid[2]);
 
-		stbXoutput = (double) motorXspeed;
-		stbYoutput = (double) motorYspeed;
+//		stbXoutput = (double) motorXspeed;
+//		stbYoutput = (double) motorYspeed;
+		stbXoutput = 0;
+		stbYoutput = 0;
+
+#if MOVE_STAB_DEBUG
+		Serial.print(F("Az:El= "));
+		Serial.print(stbPosition[0]);
+		Serial.print(' ');
+		Serial.println(stbPosition[1]);
+		Serial.print(F("Xkpid= "));
+		Serial.print(stbXpid.GetKp());
+		Serial.print(' ');
+		Serial.print(stbXpid.GetKi());
+		Serial.print(' ');
+		Serial.print(stbXpid.GetKd());
+		Serial.println();
+#endif // MOVE_STAB_DEBUG
 
 		stbXpid.SetMode(AUTOMATIC);
 		stbYpid.SetMode(AUTOMATIC);
@@ -902,11 +950,14 @@ void moveStabEnd()
 	stbYpid.SetMode(MANUAL);
 }
 
+//TODO [May 7, 2018, miftakur]:
+//stabHandler
+
 void moveStabHandler()
 {
 
 #if STAB_DEBUG
-	static byte dispTimer = 0;
+	static uint32_t dispTimer = 0;
 #endif // STAB_DEBUG
 
 	moveStabInput();
@@ -917,22 +968,26 @@ void moveStabHandler()
 	if (stbYpid.Compute())
 		motorYspeed = (int) stbYoutput;
 
-//release the brake
+	//release the brake
 	bitSet(sendMotorMsg.data[0], 0);
 	bitSet(sendMotorMsg.data[0], 1);
 
 #if STAB_DEBUG
 #if STAB_PIDX_DEBUG || STAB_PIDY_DEBUG
 	if (millis() > dispTimer) {
-		dispTimer = millis() + 100;
+		dispTimer = millis() + 500;
 
 #if STAB_PIDX_DEBUG
-		Serial.print(stbXinput); Serial.print(';');
-		Serial.print(motorXspeed); Serial.print(';');
+		Serial.print(stbXinput);
+		Serial.print(';');
+		Serial.print(motorXspeed);
+		Serial.print(';');
 #endif // STAB_PIDX_DEBUG
 #if STAB_PIDY_DEBUG
-		Serial.print(stbYinput); Serial.print(';');
-		Serial.print(motorYspeed); Serial.print(';');
+		Serial.print(stbYinput);
+		Serial.print(';');
+		Serial.print(motorYspeed);
+		Serial.print(';');
 #endif // STAB_PIDY_DEBUG
 		Serial.println();
 	}
@@ -963,10 +1018,12 @@ void moveStabInput()
 		i -= 36000;
 	else if (i < -18000)
 		i += 36000;
-	stbXinput = (double) i / 100.0;
+//	stbXinput = (double) i / 100.0;
+	stbXinput = (double) i;
 
 	i = imuYPR[1] - stbPosition[1];
-	stbYinput = (double) i / 100.0;
+//	stbYinput = (double) i / 100.0;
+	stbYinput = (double) i;
 }
 
 /////////

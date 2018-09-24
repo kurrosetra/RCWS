@@ -7,9 +7,9 @@
 #define DEBUG					1
 #if DEBUG
 
-#define	BUS_DEBUG				1
-#define CAM_DEBUG				0
-#define LRF_DEBUG				1
+#define	BUS_DEBUG				0
+#define CAM_DEBUG				1
+#define LRF_DEBUG				0
 #define IMU_DEBUG				0
 
 #endif // DEBUG
@@ -53,13 +53,12 @@ byte zoomLevel = 0;
 #define LRF_POWER_ON			HIGH
 #define LRF_POWER_OFF			LOW
 #define LRF_ENABLE_PIN			3
-#define LRF_VALUE_LIFE_TIMEOUT	10000
+#define LRF_NEXT_REQ_DELAY		1000
 
 String lrfString;
 byte lrfBufSize = 64;
 uint16_t lrfVal = 0;
 uint32_t lrfValidTimer = 0;
-uint32_t lrfLifeTimer = 0;
 
 //CAN parameter
 const byte BUS_CS_PIN = 10;
@@ -78,12 +77,13 @@ struct can_frame sendImuMsg;
 struct can_frame recvMsg;
 
 //SONY
+#define USE_FOCUS_MANUAL	0
 LibVisca sony(Serial2);
 VISCAInterface_t sonyIface;
 VISCACamera_t sonyCamera;
 
 // IMU
-#define USE_VECTORNAV_IMU		0
+#define USE_VECTORNAV_IMU		1
 String imuString;
 enum IMU_UPDATE_TIMEOUT
 {
@@ -91,7 +91,9 @@ enum IMU_UPDATE_TIMEOUT
 	imuNormalTimeout = 500
 };
 uint32_t imuSendTimer = imuNormalTimeout;
+#if USE_VECTORNAV_IMU==0
 const uint32_t IMU_START_LIVE_TIME = 30;
+#endif	//#if USE_VECTORNAV_IMU==0
 
 void setup()
 {
@@ -129,6 +131,21 @@ void loop()
 {
 	wdt_reset();
 
+#if DEBUG
+	char c;
+	uint16_t focusVal = 0;
+
+	if (Serial.available()) {
+		c = Serial.read();
+		if (c == 'f') {
+			if (sony.get_focus_value(&sonyIface, &sonyCamera, &focusVal) == VISCA_SUCCESS) {
+				Serial.print(F("focus value= 0x"));
+				Serial.println(focusVal, HEX);
+			}
+		}
+	}
+#endif	//#if DEBUG
+
 	busHandler();
 	lrfHandler();
 	imuHandler();
@@ -158,6 +175,7 @@ void camInit()
 	sony.open_serial();
 	sonyIface.broadcast = 0;
 	sonyCamera.address = 1;
+	delayWdt(100);
 	//sony.clear(&sonyIface, &sonyCamera);
 #if CAM_DEBUG
 	Serial.println();
@@ -169,7 +187,15 @@ void camInit()
 	else {
 		Serial.println(F("error get camera info"));
 	}
+
 #endif // CAM_DEBUG
+
+	sony.set_zoom_tele_speed(&sonyIface, &sonyCamera, 7);
+	sony.set_zoom_wide_speed(&sonyIface, &sonyCamera, 7);
+	sony.set_focus_far_speed(&sonyIface, &sonyCamera, 7);
+	sony.set_focus_near_speed(&sonyIface, &sonyCamera, 7);
+
+	sony.set_stabilizer(&sonyIface, &sonyCamera, VISCA_CAM_STABILIZER_ON);
 
 	camThermalPower(THERMAL_PWR_OFF);
 
@@ -301,8 +327,17 @@ void camZoom(byte zoom)
 
 void camSonyZoom(byte zoom)
 {
-	if (zoom >= 1 && zoom <= 4)
+	//TODO [Jun 28, 2018, miftakur]:
+	// add fixed focus value
+
+#if USE_FOCUS_MANUAL==0
+	if (zoom >= 1 && zoom <= 1)
 		sony.set_focus_auto(&sonyIface, &sonyCamera, VISCA_FOCUS_AUTO_ON);
+	else
+		sony.set_focus_auto(&sonyIface, &sonyCamera, VISCA_FOCUS_AUTO_MAN);
+#else
+	sony.set_focus_auto(&sonyIface, &sonyCamera, VISCA_FOCUS_AUTO_MAN);
+#endif	//#if USE_FOCUS_MANUAL==0
 
 	switch (zoom)
 	{
@@ -310,26 +345,47 @@ void camSonyZoom(byte zoom)
 #if CAM_DEBUG
 		Serial.println(F("SONY: zoom 1"));
 #endif // CAM_DEBUG
+#if USE_FOCUS_MANUAL
+		sony.set_zoom_and_focus_value(&sonyIface, &sonyCamera, 0x2000, 0x5800);
+#else
 		sony.set_zoom_value(&sonyIface, &sonyCamera, 0x2000);
+#endif	//#if USE_FOCUS_MANUAL
+
 		break;
 	case 2:
 #if CAM_DEBUG
 		Serial.println(F("SONY: zoom 2"));
 #endif // CAM_DEBUG
+#if USE_FOCUS_MANUAL
+		sony.set_zoom_and_focus_value(&sonyIface, &sonyCamera, 0x4000, 0x1540);
+#else
 		sony.set_zoom_value(&sonyIface, &sonyCamera, 0x4000);
+		sony.set_focus_value(&sonyIface, &sonyCamera, 0x1540);
+#endif	//#if USE_FOCUS_MANUAL
 		break;
 	case 3:
 #if CAM_DEBUG
 		Serial.println(F("SONY: zoom 3"));
 #endif // CAM_DEBUG
+#if USE_FOCUS_MANUAL
+		sony.set_zoom_and_focus_value(&sonyIface, &sonyCamera, 0x6000, 0x14F1);
+#else
 		sony.set_zoom_value(&sonyIface, &sonyCamera, 0x6000);
+		sony.set_focus_value(&sonyIface, &sonyCamera, 0x14f1);
+#endif	//#if USE_FOCUS_MANUAL
 		break;
 	case 4:
 #if CAM_DEBUG
 		Serial.println(F("SONY: zoom 4"));
 #endif // CAM_DEBUG
-		sony.set_zoom_value(&sonyIface, &sonyCamera, 0x7AC0);
-		//sony.set_zoom_value(&sonyIface, &sonyCamera, 0x7000);
+#if USE_FOCUS_MANUAL
+		sony.set_zoom_and_focus_value(&sonyIface, &sonyCamera, 0x7000, 0x1000);
+#else
+//		sony.set_zoom_and_focus_value(&sonyIface, &sonyCamera, 0x7000, 0x1000);
+		sony.set_zoom_value(&sonyIface, &sonyCamera, 0x7000);
+		sony.set_focus_value(&sonyIface, &sonyCamera, 0x1000);
+
+#endif	//#if USE_FOCUS_MANUAL
 		break;
 	}
 }
@@ -440,9 +496,6 @@ void lrfHandler()
 	byte awal, akhir;
 	String s;
 
-	//TODO [Apr 27, 2018, miftakur]:
-	//lrfHandler
-
 	if (Serial1.available()) {
 		c = Serial1.read();
 		if (getLrfPower() == LRF_POWER_ON) {
@@ -457,7 +510,7 @@ void lrfHandler()
 
 #if LRF_DEBUG
 				if (lrfString.length() >= 3)
-					Serial.println(lrfString);
+				Serial.println(lrfString);
 #endif	//#if LRF_DEBUG
 
 				if (lrfString.indexOf("D=") >= 0 && lrfString.indexOf('m') >= 0) {
@@ -491,11 +544,6 @@ void lrfHandler()
 	if (lrfValidTimer && millis() >= lrfValidTimer)
 		lrfValidTimer = 0;
 
-	if (lrfLifeTimer && millis() > lrfLifeTimer) {
-		lrfLifeTimer = 0;
-		lrfVal = 0;
-	}
-
 	//LSB
 	sendOptMsg.data[2] = lrfVal & 0xFF;
 	//MSB
@@ -522,7 +570,10 @@ void imuHandler()
 	int _ypr[3] = { 0, 0, 0 };
 	String tem;
 	byte awal, akhir, i;
+#if USE_VECTORNAV_IMU==0
 	static uint32_t _imuLiveTime = 0;
+#endif	//#if USE_VECTORNAV_IMU
+
 #if IMU_DEBUG
 	static uint32_t _imuDebug = 0;
 #endif	//#if IMU_DEBUG
@@ -551,7 +602,7 @@ void imuHandler()
 			}
 
 			// reform ypr value from float to int
-			_ypr[0] = (int) (imuRead[0] * 100); /*max 3600*/
+			_ypr[0] = (int) (imuRead[0] * 100); /*max 18000*/
 			_ypr[1] = (int) (imuRead[1] * 100); /*max 9000*/
 			_ypr[2] = (int) (imuRead[2] * 100); /*max 9000*/
 
@@ -701,10 +752,17 @@ void busHandler()
 			_move_state = recvMsg.data[2];
 			if (_move_state != _prev_move_state) {
 				// stabilize mode
-				if (_move_state == 0b10)
+				if (_move_state == 0b10) {
 					imuSendTimer = imuStabTimeout;
-				else
+					//TODO [Jun 26, 2018, miftakur]:
+					// image stabilizer on
+//					sony.set_stabilizer(&sonyIface, &sonyCamera, VISCA_CAM_STABILIZER_ON);
+				}
+				else {
 					imuSendTimer = imuNormalTimeout;
+					// image stabilizer off
+//					sony.set_stabilizer(&sonyIface, &sonyCamera, VISCA_CAM_STABILIZER_OFF);
+				}
 
 				_prev_move_state = _move_state;
 			}	//(_move_state != _prev_move_state)
@@ -754,8 +812,6 @@ void busHandler()
 			/**
 			 * LRF COMMAND
 			 */
-			//TODO [Apr 27, 2018, miftakur]:
-			//lrf req
 			if (getLrfPower() == LRF_POWER_ON && bitRead(recvMsg.data[5], 2)
 				&& lrfValidTimer == 0) {
 #if LRF_DEBUG
@@ -763,8 +819,7 @@ void busHandler()
 #endif	//#if LRF_DEBUG
 
 				lrfStart();
-				lrfValidTimer = millis() + 2000;
-				lrfLifeTimer = millis() + LRF_VALUE_LIFE_TIMEOUT;
+				lrfValidTimer = millis() + LRF_NEXT_REQ_DELAY;
 			}
 
 			_prev_js_command = _js_command;

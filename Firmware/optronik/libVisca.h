@@ -151,6 +151,8 @@
 #define VISCA_EXP_COMP_POWER             0x3E
 #define VISCA_EXP_COMP_VALUE             0x4E
 #define VISCA_BACKLIGHT_COMP             0x33
+#define   VISCA_BACKLIGHT_COMP_ON		 0x02
+#define   VISCA_BACKLIGHT_COMP_OFF		 0x03
 #define VISCA_SPOT_AE                    0x59
 #define   VISCA_SPOT_AE_ON               0x02
 #define   VISCA_SPOT_AE_OFF              0x03
